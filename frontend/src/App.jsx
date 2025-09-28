@@ -17,7 +17,7 @@ function TrackCard({ track, idx, onMute, onSolo, onPlay, audioRef }) {
       <div className="chips">
         {track.sections.map((s, k) => (
           <button key={k} className="chip" onClick={() => onPlay(idx, s)}>
-             {s.label} ({s.start.toFixed(1)}{s.end.toFixed(1)})
+             {s.label} ({s.start.toFixed(1)}–{s.end.toFixed(1)})
           </button>
         ))}
       </div>
@@ -184,7 +184,7 @@ export default function App(){
 
       <div className="panel">
         <div className="controls">
-          <label>Upload 13
+          <label>Upload 1–3
             <input type="file" accept=".wav,.aiff,.aif,.mp3,.flac" multiple onChange={handleFiles}/>
           </label>
 
