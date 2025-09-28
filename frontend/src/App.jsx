@@ -5,7 +5,28 @@ import SectionEditor from "./SectionEditor.jsx";
 import "./SectionEditor.css";
 
 function TrackCard({ track, idx, onMute, onSolo, onPlay, audioRef }) {
-  return (
+  function injectDemo(){
+  const mkSecs = (len)=>[
+    {label:"Intro", start:0, end:10},
+    {label:"Verse 1", start:10, end:30},
+    {label:"Chorus", start:30, end:50},
+    {label:"Verse 2", start:50, end:70},
+    {label:"Bridge", start:70, end:85},
+    {label:"Chorus", start:85, end:len}
+  ];
+  const t1 = {
+    name:"Demo A.wav", bpm: 120, key:"C#m", duration: 100, hash:"demoA",
+    sections: mkSecs(100), muted:false, solo:false, url:""
+  };
+  const t2 = {
+    name:"Demo B.wav", bpm: 120, key:"Am", duration: 95, hash:"demoB",
+    sections: mkSecs(95), muted:false, solo:false, url:""
+  };
+  setTracks([t1,t2]);
+  setProjectBpm(120);
+}
+
+return (
     <div className="card">
       <audio ref={audioRef} preload="metadata" />
       <div className="row">
@@ -53,7 +74,7 @@ export default function App(){
     setProjectBpm(Math.round(enhanced[0]?.bpm ?? projectBpm));
     setTimeout(() => {
       enhanced.forEach(t => {
-        const a = audioRefs.current[t.name];
+        const a = audioRefs.current[t.hash];
         if(a){ a.src = t.url; }
       });
     }, 0);
@@ -86,7 +107,7 @@ export default function App(){
       Object.values(audioRefs.current).forEach(a => a?.pause());
       const t = tracks[i];
       if(!t) return;
-      const a = audioRefs.current[t.name];
+      const a = audioRefs.current[t.hash];
       if(!a){ console.warn("No <audio> ref"); return; }
 
       const payload = {
@@ -183,6 +204,27 @@ function injectDemo(){
   setTracks([t1,t2]);
   setProjectBpm(120);
 }
+function injectDemo(){
+  const mkSecs = (len)=>[
+    {label:"Intro", start:0, end:10},
+    {label:"Verse 1", start:10, end:30},
+    {label:"Chorus", start:30, end:50},
+    {label:"Verse 2", start:50, end:70},
+    {label:"Bridge", start:70, end:85},
+    {label:"Chorus", start:85, end:len}
+  ];
+  const t1 = {
+    name:"Demo A.wav", bpm: 120, key:"C#m", duration: 100, hash:"demoA",
+    sections: mkSecs(100), muted:false, solo:false, url:""
+  };
+  const t2 = {
+    name:"Demo B.wav", bpm: 120, key:"Am", duration: 95, hash:"demoB",
+    sections: mkSecs(95), muted:false, solo:false, url:""
+  };
+  setTracks([t1,t2]);
+  setProjectBpm(120);
+}
+
 return (
     <div className="wrap">
       {/* Debug banner INSIDE the root (keeps one JSX parent) */}
@@ -197,11 +239,12 @@ return (
           <label>Upload 1–3
             <input type="file" accept=".wav,.aiff,.aif,.mp3,.flac" multiple onChange={handleFiles}/>
           </label>
+          <button onClick={injectDemo}>Load Demo Tracks</button>
 
           <button onClick={()=>{
             const t = tracks[0];
             if(!t) return;
-            const a = audioRefs.current[t.name];
+            const a = audioRefs.current[t.hash];
             if(!a) return;
             a.src = t.url;
             a.play().catch(() => alert("Click anywhere on the page, then press again."));
@@ -255,7 +298,7 @@ return (
               track={t} idx={i}
               onMute={toggleMute} onSolo={toggleSolo}
               onPlay={audition}
-              audioRef={el => { if(el){ audioRefs.current[t.name]=el; }}}
+              audioRef={el => { if(el){ audioRefs.current[t.hash]=el; }}}
             />
           ))}
         </div>
@@ -290,4 +333,5 @@ return (
     </div>
   );
 }
+
 
