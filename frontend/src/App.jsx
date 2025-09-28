@@ -26,7 +26,7 @@ function TrackCard({ track, idx, onMute, onSolo, onPlay, audioRef }) {
   );
 }
 
-export default function App(){
+export default function App(){ console.log("MiniMixLab: App mounted");
   const [tracks, setTracks] = useState([]);     // analyzed tracks
   const audioRefs = useRef({});
   const [projectBpm, setProjectBpm] = useState(88);
@@ -175,8 +175,7 @@ export default function App(){
     }
   }
 
-  return (
-    <div className="wrap">
+  return (<div style={{background:"#0b0f1a",color:"#fff",padding:"8px 12px",fontFamily:"system-ui",position:"sticky",top:0,zIndex:9999}}>UI LOADED   if you see this, React mounted.</div><div className="wrap">
       <h1>MiniMixLab </h1>
 
       <div className="panel">
@@ -273,3 +272,4 @@ export default function App(){
     </div>
   );
 }
+
