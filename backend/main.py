@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Path
 from fastapi.responses import FileResponse, ORJSONResponse
@@ -112,7 +112,7 @@ def _analysis_to_dict(a) -> dict:
 @app.post("/analyze/batch", response_model=BatchResult)
 async def analyze_batch(files: List[UploadFile] = File(...)):
     if not files or len(files) > 3:
-        raise HTTPException(400, "Upload 1–3 files")
+        raise HTTPException(400, "Upload 1â€“3 files")
 
     async def _one(f: UploadFile) -> TrackAnalysisModel:
         if not f.filename.lower().endswith((".wav", ".aiff", ".aif", ".mp3", ".flac")):
@@ -221,6 +221,8 @@ def delete_cache(file_hash: str = Path(..., min_length=8, max_length=64)):
     return {"deleted": deleted}
 
 # ---------------- Health & Frontend ----------------
+from glob import glob
+import os
 @app.get("/healthz")
 def healthz():
     return {"ok": True}
@@ -228,3 +230,15 @@ def healthz():
 FRONTEND_BUILD = SysPath(__file__).resolve().parent.parent / "frontend_dist"
 # Serve React build at root
 app.mount("/", StaticFiles(directory=FRONTEND_BUILD, html=True), name="frontend")
+@app.get("/__where_frontend")
+def __where_frontend():
+    p = FRONTEND
+    return {"FRONTEND": str(p), "exists": p.exists(), "assets_exists": (p / "assets").exists()}
+
+@app.get("/__assets_list")
+def __assets_list():
+    base = FRONTEND / "assets"
+    if not base.exists():
+        return {"ok": False, "reason": "assets dir missing", "dir": str(base)}
+    files = sorted(os.path.basename(x) for x in glob(str(base / "*")))
+    return {"ok": True, "dir": str(base), "files": files[:50]}
