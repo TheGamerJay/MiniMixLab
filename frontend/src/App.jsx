@@ -137,43 +137,53 @@ export default function App(){
   function onRemoveItem(i){ setItems(prev => prev.filter((_,k)=>k!==i)); }
 
   async function renderFull(){
-    if(items.length === 0) return;
-    setRenderUrl("");
-
-    const payload = {
-      project_bpm: Number(projectBpm),
-      crossfade_ms: Number(xfade),
-      bars: Number(bars),
-      master_fade_out_ms: Number(masterFadeOut),
-      items: items.map(({label, ...keep})=>keep)
-    };
-
-    const res = await axios.post("/arrange/render", payload, { responseType: "blob" });
-    if (res.status !== 200) {
-      alert("Render failed  see devtools Network tab");
-      return;
-    }
-    const blob = res.data;
-    const url = URL.createObjectURL(new Blob([blob], {type: "audio/wav"}));
-    setRenderUrl(url);
-
-    if (autoImportMix) {
-      try {
-        const file = new File([blob], "MiniMixLab_mix.wav", { type: "audio/wav" });
-        const fd = new FormData();
-        fd.append("files", file);
-        const { data } = await axios.post("/analyze/batch", fd);
-        const newTracks = data.tracks.map(t => ({
-          ...t, muted:false, solo:false, file, url
-        }));
-        setTracks(prev => [...prev, ...newTracks]);
-      } catch (e) {
-        console.error("Auto-import of rendered mix failed:", e);
-      }
-    }
+  if(items.length === 0) return;
+  setRenderUrl("");
+  const payload = {
+    project_bpm: Number(projectBpm),
+    crossfade_ms: Number(xfade),
+    bars: Number(bars),
+    master_fade_out_ms: Number(masterFadeOut),
+    items: items.map(({label, ...keep})=>keep)
+  };
+  const res = await axios.post("/arrange/render", payload, { responseType: "blob" });
+  if (res.status !== 200) { alert("Render failed  see devtools Network tab"); return; }
+  const blob = res.data;
+  const url = URL.createObjectURL(new Blob([blob], {type: "audio/wav"}));
+  setRenderUrl(url);
+  if (autoImportMix) {
+    try {
+      const file = new File([blob], "MiniMixLab_mix.wav", { type: "audio/wav" });
+      const fd = new FormData();
+      fd.append("files", file);
+      const { data } = await axios.post("/analyze/batch", fd);
+      const newTracks = data.tracks.map(t => ({ ...t, muted:false, solo:false, file, url }));
+      setTracks(prev => [...prev, ...newTracks]);
+    } catch (e) { console.error("Auto-import of rendered mix failed:", e); }
   }
+}
 
-  return (
+function injectDemo(){
+  const mkSecs = (len)=>[
+    {label:"Intro", start:0, end:10},
+    {label:"Verse 1", start:10, end:30},
+    {label:"Chorus", start:30, end:50},
+    {label:"Verse 2", start:50, end:70},
+    {label:"Bridge", start:70, end:85},
+    {label:"Chorus", start:85, end:len}
+  ];
+  const t1 = {
+    name:"Demo A.wav", bpm: 120, key:"C#m", duration: 100, hash:"demoA",
+    sections: mkSecs(100), muted:false, solo:false, url:""
+  };
+  const t2 = {
+    name:"Demo B.wav", bpm: 120, key:"Am", duration: 95, hash:"demoB",
+    sections: mkSecs(95), muted:false, solo:false, url:""
+  };
+  setTracks([t1,t2]);
+  setProjectBpm(120);
+}
+return (
     <div className="wrap">
       {/* Debug banner INSIDE the root (keeps one JSX parent) */}
       <div style={{background:"#0b0f1a",color:"#fff",padding:"8px 12px",fontFamily:"system-ui",position:"sticky",top:0,zIndex:9999}}>
@@ -280,3 +290,4 @@ export default function App(){
     </div>
   );
 }
+
