@@ -1,7 +1,7 @@
 ﻿import React, { useRef, useState } from "react";
 import axios from "axios";
 import Timeline from "./Timeline.jsx";
-// â¬‡ï¸ use the new compact editor instead of ItemsPanel
+//  use the new compact editor instead of ItemsPanel
 import SectionEditor from "./SectionEditor.jsx";
 import "./SectionEditor.css";
 
@@ -11,14 +11,14 @@ function TrackCard({ track, idx, onMute, onSolo, onPlay, audioRef }) {
       <audio ref={audioRef} preload="metadata" />
       <div className="row">
         <strong>{track.name}</strong>
-        <span>{Math.round(track.bpm)} BPM â€¢ {track.key}</span>
+        <span>{Math.round(track.bpm)} BPM  {track.key}</span>
         <button className={track.muted ? "muted" : ""} onClick={() => onMute(idx)}>M</button>
         <button className={track.solo ? "solo" : ""} onClick={() => onSolo(idx)}>S</button>
       </div>
       <div className="chips">
         {track.sections.map((s, k) => (
           <button key={k} className="chip" onClick={() => onPlay(idx, s)}>
-            â–¶ {s.label} ({s.start.toFixed(1)}â€“{s.end.toFixed(1)})
+             {s.label} ({s.start.toFixed(1)}{s.end.toFixed(1)})
           </button>
         ))}
       </div>
@@ -61,19 +61,18 @@ export default function App(){
   function toggleMute(i){
     setTracks(ts => ts.map((t, k) => k===i ? {...t, muted: !t.muted, solo:false} : t));
   }
+
+  //  safe, simple version (no ternary), fixes build error
   function toggleSolo(i){
-  setTracks(ts => {
-    const isSolo = !ts[i].solo;
-    return ts.map((t, k) =>
-      k === i
-        ? { ...t, solo: isSolo, muted: false }
-        : { ...t, solo: false, muted: (isSolo || t.muted) }
-    );
-  });
-}
-                                  : {...t, solo:false, muted: (isSolo || t.muted});
+    setTracks(ts => {
+      const isSolo = !ts[i].solo;
+      return ts.map((t, k) => {
+        if (k === i) return { ...t, solo: isSolo, muted: false };
+        return { ...t, solo: false, muted: (isSolo || t.muted) };
+      });
     });
   }
+
   function getGain(i){
     const anySolo = tracks.some(t=>t.solo);
     if(tracks[i].muted) return 0;
@@ -115,7 +114,7 @@ export default function App(){
       }
     } catch (e) {
       console.error("audition() error", e);
-      alert("Preview error â€” see console for details.");
+      alert("Preview error  see console for details.");
     }
   }
 
@@ -152,7 +151,7 @@ export default function App(){
     // 1) Render full mix
     const res = await axios.post("/arrange/render", payload, { responseType: "blob" });
     if (res.status !== 200) {
-      alert("Render failed â€” see devtools Network tab");
+      alert("Render failed  see devtools Network tab");
       return;
     }
     const blob = res.data;
@@ -178,11 +177,11 @@ export default function App(){
 
   return (
     <div className="wrap">
-      <h1>MiniMixLab ðŸŽ¶</h1>
+      <h1>MiniMixLab </h1>
 
       <div className="panel">
         <div className="controls">
-          <label>Upload 1â€“3
+          <label>Upload 13
             <input type="file" accept=".wav,.aiff,.aif,.mp3,.flac" multiple onChange={handleFiles}/>
           </label>
 
@@ -255,7 +254,7 @@ export default function App(){
             setSelected={setSelected}
           />
 
-          {/* â¬‡ï¸ NEW: compact per-item editor */}
+          {/*  NEW: compact per-item editor */}
           <SectionEditor
             items={items}
             onUpdate={(i, updates) => {
@@ -267,11 +266,10 @@ export default function App(){
           />
 
           <div className="legend">
-            Replace: choose a different track+section â€¢ Extend: set LoopÃ— â€¢ Crop: edit Start/End â€¢ Remove: delete item â€¢ Fade Out: set ms in controls.
+            Replace: choose a different track+section  Extend: set Loop  Crop: edit Start/End  Remove: delete item  Fade Out: set ms in controls.
           </div>
         </div>
       </div>
     </div>
   );
 }
-
