@@ -17,6 +17,7 @@ class ArrItem:
     source_bpm: float
     semitones: float
     at_bar: int
+    loop_times: int = 1          # NEW: Extend by looping this many times (>=1)
 
 def _read_resample_stereo(path: Path, sr: int = TARGET_SR) -> np.ndarray:
     y, in_sr = sf.read(path.as_posix(), always_2d=True)
@@ -39,21 +40,36 @@ def _lin_fade(n: int):
     fo = 1.0 - fi
     return fi, fo
 
-def render_mix(project_bpm: float, items: List[ArrItem], bars: int | None = None, crossfade_ms: int = 120) -> Path:
+def render_mix(
+    project_bpm: float,
+    items: List[ArrItem],
+    bars: int | None = None,
+    crossfade_ms: int = 120,
+    master_fade_out_ms: int = 0,          # NEW: master fade out at end
+) -> Path:
     bar_dur = 60.0 / project_bpm * 4.0  # 4/4
     rendered: List[Tuple[int, np.ndarray]] = []
     max_end = 0
     xfade_n = int(TARGET_SR * (crossfade_ms / 1000.0))
 
     for it in items:
+        # 1) slice original
         tmp_in = DATA / f"arr_in_{it.file_hash}_{int(it.start*1000)}_{int(it.end*1000)}.wav"
         tmp_out = DATA / f"arr_out_{it.file_hash}_{int(it.start*1000)}_{int(it.end*1000)}.wav"
         slice_wav(it.src_path, tmp_in, it.start, it.end)
+
+        # 2) time/pitch to project
         ratio = project_bpm / max(1e-6, it.source_bpm)
         rubberband_time_pitch(tmp_in, tmp_out, bpm_ratio=ratio, semitones=it.semitones)
         y = _read_resample_stereo(tmp_out)
         tmp_in.unlink(missing_ok=True); tmp_out.unlink(missing_ok=True)
 
+        # 3) EXTEND: loop/duplicate end-to-end
+        loops = max(1, int(it.loop_times or 1))
+        if loops > 1 and y.shape[0] > 0:
+            y = np.tile(y, (loops, 1))
+
+        # 4) place on timeline
         start_sample = int(it.at_bar * bar_dur * TARGET_SR)
         rendered.append((start_sample, y))
         max_end = max(max_end, start_sample + y.shape[0])
@@ -63,6 +79,7 @@ def render_mix(project_bpm: float, items: List[ArrItem], bars: int | None = None
 
     mix = np.zeros((max_end + 1, TARGET_CH), dtype=np.float32)
 
+    # 5) sum with gentle crossfades at segment starts
     for start, y in rendered:
         end = start + y.shape[0]
         mix = _ensure_len(mix, end)
@@ -77,6 +94,16 @@ def render_mix(project_bpm: float, items: List[ArrItem], bars: int | None = None
             seg[:, :] += y[:, :]
         mix[start:end, :] = seg
 
+    # 6) MASTER FADE OUT (optional)
+    if master_fade_out_ms > 0 and mix.shape[0] > 0:
+        n = int(TARGET_SR * (master_fade_out_ms / 1000.0))
+        n = min(n, mix.shape[0])
+        if n > 0:
+            fade = np.linspace(1.0, 0.0, n, dtype=np.float32)
+            mix[-n:, 0] *= fade
+            mix[-n:, 1] *= fade
+
+    # 7) gentle normalization
     peak = float(np.max(np.abs(mix))) if mix.size else 0.0
     if peak > 0.99:
         mix *= (0.99 / peak)

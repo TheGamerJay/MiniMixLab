@@ -2,6 +2,7 @@ from __future__ import annotations
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse, ORJSONResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List
 from pathlib import Path
@@ -12,6 +13,12 @@ from processor import analyze_audio, file_hash_bytes, file_hash
 from renderer import ArrItem, render_mix
 
 app = FastAPI(default_response_class=ORJSONResponse)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"]
+)
 SEM = asyncio.Semaphore(3)  # analyze up to 3 at once
 
 # ---------- models ----------
@@ -90,11 +97,13 @@ class ArrangeItemModel(BaseModel):
     source_bpm: float
     semitones: float = 0.0
     at_bar: int
+    loop_times: int = 1         # NEW: Extend/loop this item
 
 class ArrangeRequest(BaseModel):
     project_bpm: float
     crossfade_ms: int = 120
     bars: int | None = None
+    master_fade_out_ms: int = 0  # NEW: master fade at end of mix
     items: List[ArrangeItemModel]
 
 @app.post("/arrange/render")
@@ -109,9 +118,14 @@ async def arrange_render(req: ArrangeRequest):
             file_hash=it.file_hash, src_path=src,
             start=it.start, end=it.end,
             source_bpm=it.source_bpm, semitones=it.semitones,
-            at_bar=it.at_bar
+            at_bar=it.at_bar, loop_times=it.loop_times
         ))
-    out = render_mix(req.project_bpm, arr, bars=req.bars, crossfade_ms=req.crossfade_ms)
+    out = render_mix(
+        req.project_bpm, arr,
+        bars=req.bars,
+        crossfade_ms=req.crossfade_ms,
+        master_fade_out_ms=req.master_fade_out_ms
+    )
     return FileResponse(out, media_type="audio/wav")
 
 # ---------- serve frontend build if present ----------

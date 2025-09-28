@@ -1,6 +1,7 @@
 import React, { useRef, useState } from "react";
 import axios from "axios";
 import Timeline from "./Timeline.jsx";
+import ItemsPanel from "./ItemsPanel.jsx";
 
 function TrackCard({track, idx, onMute, onSolo, onPlay, audioRef}) {
   return (
@@ -29,8 +30,10 @@ export default function App(){
   const [projectBpm, setProjectBpm] = useState(88);
   const [bars, setBars] = useState(32);
   const [xfade, setXfade] = useState(120);
+  const [masterFadeOut, setMasterFadeOut] = useState(0); // NEW: ms
   const [items, setItems] = useState([]);     // placed items
   const [renderUrl, setRenderUrl] = useState("");
+  const [selected, setSelected] = useState(null); // selected section for click-to-place
 
   async function handleFiles(e){
     const files = Array.from(e.target.files).slice(0,3);
@@ -69,20 +72,48 @@ export default function App(){
     return 1;
   }
   async function audition(i, sec){
-    // stop all overlap
-    Object.values(audioRefs.current).forEach(a => a?.pause());
-    const t = tracks[i];
-    const a = audioRefs.current[t.name];
-    if(!a) return;
-    if(getGain(i)===0) return;
+    try {
+      // stop any playing audio
+      Object.values(audioRefs.current).forEach(a => a?.pause());
 
-    const payload = {
-      file_hash: t.hash, start: sec.start, end: sec.end,
-      target_bpm: t.bpm, source_bpm: t.bpm, semitones: 0
-    };
-    const res = await axios.post("/align/preview", payload, { responseType: "blob" });
-    const blobUrl = URL.createObjectURL(new Blob([res.data], {type: "audio/wav"}));
-    a.src = blobUrl; a.currentTime = 0; a.volume = 1; a.play();
+      const t = tracks[i];
+      const a = audioRefs.current[t.name];
+      if(!a){ console.warn("No <audio> ref"); return; }
+
+      // call backend to create a preview from server-side cached file
+      const payload = {
+        file_hash: t.hash,
+        start: sec.start,
+        end: sec.end,
+        target_bpm: t.bpm,
+        source_bpm: t.bpm,
+        semitones: 0
+      };
+
+      console.log("POST /align/preview", payload);
+      const res = await axios.post("/align/preview", payload, { responseType: "blob" });
+
+      if (res.status !== 200) {
+        console.error("Preview failed", res.status, res.data);
+        alert("Preview failed. Check console/network tab.");
+        return;
+      }
+
+      const url = URL.createObjectURL(new Blob([res.data], { type: "audio/wav" }));
+      a.src = url;
+      a.currentTime = 0;
+      a.volume = 1;
+      const playPromise = a.play();
+      if (playPromise?.catch) {
+        playPromise.catch(err => {
+          console.error("Audio play error", err);
+          alert("Browser blocked playback. Click once anywhere in the page, then try again.");
+        });
+      }
+    } catch (e) {
+      console.error("audition() error", e);
+      alert("Preview error — see console for details.");
+    }
   }
 
   function onDropSection(trackIdx, section, barIndex){
@@ -94,7 +125,8 @@ export default function App(){
       end: section.end,
       source_bpm: t.bpm,
       semitones: 0,
-      at_bar: barIndex
+      at_bar: barIndex,
+      loop_times: 1
     };
     setItems(prev => [...prev, it]);
   }
@@ -107,6 +139,7 @@ export default function App(){
       project_bpm: Number(projectBpm),
       crossfade_ms: Number(xfade),
       bars: Number(bars),
+      master_fade_out_ms: Number(masterFadeOut),
       items: items.map(({label, ...keep})=>keep)
     };
     const res = await axios.post("/arrange/render", payload, { responseType: "blob" });
@@ -123,6 +156,14 @@ export default function App(){
           <label>Upload 1–3
             <input type="file" accept=".wav,.aiff,.aif,.mp3,.flac" multiple onChange={handleFiles}/>
           </label>
+          <button onClick={()=>{
+            const t = tracks[0];
+            if(!t) return;
+            const a = audioRefs.current[t.name];
+            if(!a) return;
+            a.src = t.url;  // play the local file directly
+            a.play().catch(err => alert("Click anywhere on the page, then press again."));
+          }}>Play Original</button>
           <label>Project BPM
             <input type="number" value={projectBpm} onChange={e=>setProjectBpm(e.target.value)} />
           </label>
@@ -132,7 +173,12 @@ export default function App(){
           <label>Crossfade (ms)
             <input type="number" value={xfade} onChange={e=>setXfade(e.target.value)} />
           </label>
+          <label>Fade Out (ms)
+            <input type="number" value={masterFadeOut} onChange={e=>setMasterFadeOut(e.target.value)} />
+          </label>
           <button onClick={renderFull} disabled={items.length===0}>Render Full Mix</button>
+          <button onClick={()=> setItems(prev => prev.slice(0,-1))} disabled={!items.length}>Undo</button>
+          <button onClick={()=> setItems([])} disabled={!items.length}>Clear</button>
         </div>
 
         {renderUrl && (
@@ -162,9 +208,17 @@ export default function App(){
             items={items}
             onDropSection={onDropSection}
             onRemoveItem={onRemoveItem}
+            selected={selected}
+            setSelected={setSelected}
+          />
+          <ItemsPanel
+            items={items}
+            setItems={setItems}
+            tracks={tracks}
+            onRemoveItem={onRemoveItem}
           />
           <div className="legend">
-            Drag a section chip into a bar to place it. Click ✕ on a placed tag to remove.
+            Replace: choose a different track+section • Extend: set Loop× • Crop: edit Start/End • Remove: delete item • Fade Out: set ms in controls.
           </div>
         </div>
       </div>
