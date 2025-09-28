@@ -1,0 +1,81 @@
+﻿.editor-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 12px;
+}
+
+/* card */
+.editor-card {
+  background: linear-gradient(145deg, #111827, #0f172a);
+  border: 1px solid #1f2937;
+  border-radius: 14px;
+  padding: 14px;
+  color: #e5e7eb;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.45);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.editor-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(0,0,0,0.55);
+}
+
+/* header */
+.editor-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.95rem;
+  margin-bottom: 10px;
+}
+.editor-header strong {
+  color: #60a5fa;
+  font-weight: 600;
+}
+.editor-header span {
+  font-size: 0.8rem;
+  color: #9ca3af;
+}
+
+/* remove button */
+.remove-btn {
+  background: transparent;
+  border: none;
+  color: #f87171;
+  font-size: 1.1rem;
+  cursor: pointer;
+  transition: color 0.2s ease;
+}
+.remove-btn:hover {
+  color: #ef4444;
+}
+
+/* rows */
+.editor-body .row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+/* labels + inputs */
+.editor-body label {
+  font-size: 0.8rem;
+  color: #9ca3af;
+  min-width: 60px;
+}
+.editor-body input {
+  width: 80px;
+  background: #1f2937;
+  border: 1px solid #374151;
+  border-radius: 8px;
+  color: #f3f4f6;
+  padding: 4px 8px;
+  font-size: 0.85rem;
+  transition: border 0.2s ease, box-shadow 0.2s ease;
+}
+.editor-body input:focus {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 1px #3b82f6;
+  outline: none;
+}

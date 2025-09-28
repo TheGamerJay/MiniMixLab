@@ -1,4 +1,3 @@
-# backend/main.py
 from __future__ import annotations
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Path
@@ -10,6 +9,7 @@ from typing import List
 from pathlib import Path as SysPath
 import asyncio
 import aiofiles
+import traceback
 
 from config import CACHE, DATA
 from processor import (
@@ -143,24 +143,26 @@ async def align_preview(req: AlignRequest):
     tmp_in = DATA / f"slice_{req.file_hash}_{int(req.start*1000)}_{int(req.end*1000)}.wav"
     tmp_out = DATA / f"prev_{req.file_hash}_{int(req.start*1000)}_{int(req.end*1000)}.wav"
 
-    # Make the slice
-    slice_wav(src, tmp_in, req.start, req.end)
-
-    # Stretch / pitch
-    ratio = req.target_bpm / max(1e-6, req.source_bpm)
     try:
+        # Make the slice
+        slice_wav(src, tmp_in, req.start, req.end)
+
+        # Stretch / pitch
+        ratio = req.target_bpm / max(1e-6, req.source_bpm)
         rubberband_time_pitch(tmp_in, tmp_out, bpm_ratio=ratio, semitones=req.semitones)
+
+        return FileResponse(
+            tmp_out,
+            media_type="audio/wav",
+            filename=f"preview_{req.file_hash}_{int(req.start*1000)}_{int(req.end*1000)}.wav",
+        )
     except FileNotFoundError:
-        tmp_in.unlink(missing_ok=True)
-        raise HTTPException(500, "rubberband-cli not found on server image.")
+        raise HTTPException(500, "rubberband-cli not found in server image.")
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(500, detail=f"/align/preview failed: {e}")
     finally:
         tmp_in.unlink(missing_ok=True)
-
-    return FileResponse(
-        tmp_out,
-        media_type="audio/wav",
-        filename=f"preview_{req.file_hash}_{int(req.start*1000)}_{int(req.end*1000)}.wav",
-    )
 
 @app.post("/arrange/render")
 async def arrange_render(req: ArrangeRequest):
@@ -199,7 +201,6 @@ async def arrange_render(req: ArrangeRequest):
         filename="MiniMixLab_mix.wav",
     )
 
-# --- NEW: delete cached upload (+ temp slices/previews) ---
 @app.delete("/cache/{file_hash}")
 def delete_cache(file_hash: str = Path(..., min_length=8, max_length=64)):
     """
@@ -207,14 +208,12 @@ def delete_cache(file_hash: str = Path(..., min_length=8, max_length=64)):
     Returns {"deleted": True/False} indicating if any file was removed from CACHE.
     """
     deleted = False
-    # remove cached source(s)
     for p in CACHE.glob(f"{file_hash}.*"):
         try:
             p.unlink(missing_ok=True)
             deleted = True
         except Exception:
             pass
-    # also remove temp preview/slice artifacts for this hash
     for p in DATA.glob(f"slice_{file_hash}_*.wav"):
         p.unlink(missing_ok=True)
     for p in DATA.glob(f"prev_{file_hash}_*.wav"):
@@ -226,13 +225,6 @@ def delete_cache(file_hash: str = Path(..., min_length=8, max_length=64)):
 def healthz():
     return {"ok": True}
 
-FRONTEND = SysPath(__file__).resolve().parent.parent / "frontend_dist"
-if FRONTEND.exists():
-    app.mount("/assets", StaticFiles(directory=FRONTEND / "assets"), name="assets")
-
-@app.get("/")
-def index():
-    index_file = FRONTEND / "index.html"
-    if index_file.exists():
-        return FileResponse(index_file)
-    return {"ok": True, "message": "Backend up. Build frontend to serve UI."}
+FRONTEND_BUILD = SysPath(__file__).resolve().parent.parent / "frontend_dist"
+# Serve React build at root
+app.mount("/", StaticFiles(directory=FRONTEND_BUILD, html=True), name="frontend")

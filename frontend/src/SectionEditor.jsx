@@ -1,20 +1,28 @@
-import React, { useRef, useState } from "react";
+﻿import React, { useRef, useState } from "react";
 import axios from "axios";
 import Timeline from "./Timeline.jsx";
-// ⬇️ use the new compact editor instead of ItemsPanel
 import SectionEditor from "./SectionEditor.jsx";
 import "./SectionEditor.css";
 
-function TrackCard({ track, idx, onMute, onSolo, onPlay, audioRef }) {
+function TrackCard({ track, idx, onMute, onSolo, onPlay, onRemoveUpload, audioRef }) {
   return (
     <div className="card">
       <audio ref={audioRef} preload="metadata" />
-      <div className="row">
+      <div className="row" style={{ alignItems: "center", gap: 8 }}>
         <strong>{track.name}</strong>
         <span>{Math.round(track.bpm)} BPM • {track.key}</span>
-        <button className={track.muted ? "muted" : ""} onClick={() => onMute(idx)}>M</button>
-        <button className={track.solo ? "solo" : ""} onClick={() => onSolo(idx)}>S</button>
+        <div style={{ marginLeft: "auto", display:"flex", gap:6 }}>
+          <button className={track.muted ? "muted" : ""} onClick={() => onMute(idx)}>M</button>
+          <button className={track.solo ? "solo" : ""} onClick={() => onSolo(idx)}>S</button>
+          {/* NEW: remove upload button */}
+          <button title="Remove upload"
+                  onClick={() => onRemoveUpload(idx)}
+                  style={{ background:"#1f2937", border:"1px solid #374151", borderRadius:6 }}>
+            🗑
+          </button>
+        </div>
       </div>
+
       <div className="chips">
         {track.sections.map((s, k) => (
           <button key={k} className="chip" onClick={() => onPlay(idx, s)}>
@@ -27,16 +35,16 @@ function TrackCard({ track, idx, onMute, onSolo, onPlay, audioRef }) {
 }
 
 export default function App(){
-  const [tracks, setTracks] = useState([]);     // analyzed tracks
+  const [tracks, setTracks] = useState([]);
   const audioRefs = useRef({});
   const [projectBpm, setProjectBpm] = useState(88);
   const [bars, setBars] = useState(32);
   const [xfade, setXfade] = useState(120);
-  const [masterFadeOut, setMasterFadeOut] = useState(0); // ms
-  const [items, setItems] = useState([]);       // placed items on timeline
+  const [masterFadeOut, setMasterFadeOut] = useState(0);
+  const [items, setItems] = useState([]);
   const [renderUrl, setRenderUrl] = useState("");
-  const [selected, setSelected] = useState(null); // for click-to-place
-  const [autoImportMix, setAutoImportMix] = useState(true); // auto-import rendered mix as new track
+  const [selected, setSelected] = useState(null);
+  const [autoImportMix, setAutoImportMix] = useState(true);
 
   async function handleFiles(e){
     const files = Array.from(e.target.files).slice(0,3);
@@ -65,7 +73,7 @@ export default function App(){
     setTracks(ts => {
       const isSolo = !ts[i].solo;
       return ts.map((t,k)=> k===i ? {...t, solo:isSolo, muted:false}
-                                  : {...t, solo:false, muted=isSolo || t.muted});
+                                  : {...t, solo:false, muted:isSolo || t.muted});
     });
   }
   function getGain(i){
@@ -129,6 +137,29 @@ export default function App(){
     setItems(prev => [...prev, it]);
   }
   function onRemoveItem(i){ setItems(prev => prev.filter((_,k)=>k!==i)); }
+
+  // NEW: remove uploaded track + any placed items referencing it
+  function removeUpload(idx){
+    setTracks(prev => {
+      const victim = prev[idx];
+      if (!victim) return prev;
+
+      // stop and clean up audio ref
+      const a = audioRefs.current[victim.name];
+      try { a?.pause(); } catch(_e){}
+      if (a) { a.src = ""; }
+      delete audioRefs.current[victim.name];
+
+      // remove placed items from this track (match by file_hash)
+      setItems(itemsPrev => itemsPrev.filter(it => it.file_hash !== victim.hash));
+
+      // return tracks without the victim
+      const next = prev.filter((_, i) => i !== idx);
+      // optional: if nothing left, clear render player
+      if (next.length === 0) setRenderUrl("");
+      return next;
+    });
+  }
 
   // render + optional auto-import of the rendered WAV as a new track
   async function renderFull(){
@@ -232,6 +263,7 @@ export default function App(){
               track={t} idx={i}
               onMute={toggleMute} onSolo={toggleSolo}
               onPlay={audition}
+              onRemoveUpload={removeUpload}   // << NEW
               audioRef={el => { if(el){ audioRefs.current[t.name]=el; }}}
             />
           ))}
@@ -249,7 +281,6 @@ export default function App(){
             setSelected={setSelected}
           />
 
-          {/* ⬇️ NEW: compact per-item editor */}
           <SectionEditor
             items={items}
             onUpdate={(i, updates) => {
