@@ -1,7 +1,6 @@
 ﻿import React, { useRef, useState } from "react";
 import axios from "axios";
 import Timeline from "./Timeline.jsx";
-//  use the new compact editor instead of ItemsPanel
 import SectionEditor from "./SectionEditor.jsx";
 import "./SectionEditor.css";
 
@@ -18,7 +17,7 @@ function TrackCard({ track, idx, onMute, onSolo, onPlay, audioRef }) {
       <div className="chips">
         {track.sections.map((s, k) => (
           <button key={k} className="chip" onClick={() => onPlay(idx, s)}>
-             {s.label} ({s.start.toFixed(1)}–{s.end.toFixed(1)})
+             {s.label} ({s.start.toFixed(1)}{s.end.toFixed(1)})
           </button>
         ))}
       </div>
@@ -26,7 +25,9 @@ function TrackCard({ track, idx, onMute, onSolo, onPlay, audioRef }) {
   );
 }
 
-export default function App(){ console.log("MiniMixLab: App mounted");
+export default function App(){
+  console.log("MiniMixLab: App mounted");
+
   const [tracks, setTracks] = useState([]);     // analyzed tracks
   const audioRefs = useRef({});
   const [projectBpm, setProjectBpm] = useState(88);
@@ -62,7 +63,7 @@ export default function App(){ console.log("MiniMixLab: App mounted");
     setTracks(ts => ts.map((t, k) => k===i ? {...t, muted: !t.muted, solo:false} : t));
   }
 
-  //  safe, simple version (no ternary), fixes build error
+  // safe, simple version (no ternary)
   function toggleSolo(i){
     setTracks(ts => {
       const isSolo = !ts[i].solo;
@@ -135,7 +136,6 @@ export default function App(){ console.log("MiniMixLab: App mounted");
   }
   function onRemoveItem(i){ setItems(prev => prev.filter((_,k)=>k!==i)); }
 
-  // render + optional auto-import of the rendered WAV as a new track
   async function renderFull(){
     if(items.length === 0) return;
     setRenderUrl("");
@@ -148,7 +148,6 @@ export default function App(){ console.log("MiniMixLab: App mounted");
       items: items.map(({label, ...keep})=>keep)
     };
 
-    // 1) Render full mix
     const res = await axios.post("/arrange/render", payload, { responseType: "blob" });
     if (res.status !== 200) {
       alert("Render failed  see devtools Network tab");
@@ -158,7 +157,6 @@ export default function App(){ console.log("MiniMixLab: App mounted");
     const url = URL.createObjectURL(new Blob([blob], {type: "audio/wav"}));
     setRenderUrl(url);
 
-    // 2) Auto-import rendered mix as a new track (4th song)
     if (autoImportMix) {
       try {
         const file = new File([blob], "MiniMixLab_mix.wav", { type: "audio/wav" });
@@ -175,7 +173,13 @@ export default function App(){ console.log("MiniMixLab: App mounted");
     }
   }
 
-  return (<div style={{background:"#0b0f1a",color:"#fff",padding:"8px 12px",fontFamily:"system-ui",position:"sticky",top:0,zIndex:9999}}>UI LOADED   if you see this, React mounted.</div><div className="wrap">
+  return (
+    <div className="wrap">
+      {/* Debug banner INSIDE the root (keeps one JSX parent) */}
+      <div style={{background:"#0b0f1a",color:"#fff",padding:"8px 12px",fontFamily:"system-ui",position:"sticky",top:0,zIndex:9999}}>
+        UI LOADED   if you see this, React mounted.
+      </div>
+
       <h1>MiniMixLab </h1>
 
       <div className="panel">
@@ -189,7 +193,7 @@ export default function App(){ console.log("MiniMixLab: App mounted");
             if(!t) return;
             const a = audioRefs.current[t.name];
             if(!a) return;
-            a.src = t.url;  // play the local file directly
+            a.src = t.url;
             a.play().catch(() => alert("Click anywhere on the page, then press again."));
           }}>Play Original</button>
 
@@ -230,6 +234,11 @@ export default function App(){ console.log("MiniMixLab: App mounted");
 
       <div className="grid two">
         <div>
+          {tracks.length === 0 && (
+            <p style={{opacity:.85,marginTop:12}}>
+              Upload up to 3 songs to detect sections, then click any section to preview.
+            </p>
+          )}
           {tracks.map((t,i)=>(
             <TrackCard
               key={`${t.name}-${i}`}
@@ -253,7 +262,6 @@ export default function App(){ console.log("MiniMixLab: App mounted");
             setSelected={setSelected}
           />
 
-          {/*  NEW: compact per-item editor */}
           <SectionEditor
             items={items}
             onUpdate={(i, updates) => {
@@ -272,4 +280,3 @@ export default function App(){ console.log("MiniMixLab: App mounted");
     </div>
   );
 }
-
