@@ -18,7 +18,7 @@ function TrackCard({ track, idx, onMute, onSolo, onPlay, audioRef }) {
       <div className="chips">
         {track.sections.map((s, k) => (
           <button key={k} className="chip" onClick={() => onPlay(idx, s)}>
-             {s.label} ({s.start.toFixed(1)}{s.end.toFixed(1)})
+             {s.label} ({s.start.toFixed(1)}–{s.end.toFixed(1)})
           </button>
         ))}
       </div>
