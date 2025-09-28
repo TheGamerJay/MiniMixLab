@@ -62,9 +62,15 @@ export default function App(){
     setTracks(ts => ts.map((t, k) => k===i ? {...t, muted: !t.muted, solo:false} : t));
   }
   function toggleSolo(i){
-    setTracks(ts => {
-      const isSolo = !ts[i].solo;
-      return ts.map((t,k)=> k===i ? {...t, solo:isSolo, muted:false}
+  setTracks(ts => {
+    const isSolo = !ts[i].solo;
+    return ts.map((t, k) =>
+      k === i
+        ? { ...t, solo: isSolo, muted: false }
+        : { ...t, solo: false, muted: (isSolo || t.muted) }
+    );
+  });
+}
                                   : {...t, solo:false, muted: (isSolo || t.muted});
     });
   }
@@ -268,3 +274,4 @@ export default function App(){
     </div>
   );
 }
+
