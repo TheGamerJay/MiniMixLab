@@ -1,7 +1,9 @@
 FROM node:20-slim AS web
 WORKDIR /app/frontend
+COPY frontend/package*.json ./
+RUN npm install --no-audit --no-fund
 COPY frontend/ ./
-RUN npm ci --no-audit --no-fund && npm run build
+RUN npm run build
 
 FROM python:3.11-slim
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
