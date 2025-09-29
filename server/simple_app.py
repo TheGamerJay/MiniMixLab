@@ -116,23 +116,55 @@ def segment_track(filepath):
 
         # 5. Intelligent labeling based on position and characteristics
         segments = []
-        section_labels = [
-            "Intro", "Verse 1", "Pre-Chorus", "Chorus", "Verse 2",
-            "Bridge", "Breakdown", "Chorus", "Outro"
-        ]
+
+        # Analyze each segment for rap characteristics
+        def detect_rap_section(y_segment, sr):
+            """Detect if a segment is likely a rap section based on audio features"""
+            try:
+                # Extract features that indicate rap
+                tempo, _ = librosa.beat.beat_track(y=y_segment, sr=sr)
+                spectral_rolloff = librosa.feature.spectral_rolloff(y=y_segment, sr=sr)
+                zero_crossing_rate = librosa.feature.zero_crossing_rate(y_segment)
+
+                # Rap characteristics:
+                # - Often has lower spectral rolloff (more bass/mid frequencies)
+                # - Higher zero crossing rate (more speech-like)
+                # - Often different tempo patterns
+
+                avg_rolloff = np.mean(spectral_rolloff)
+                avg_zcr = np.mean(zero_crossing_rate)
+
+                # Simple heuristic: if spectral rolloff is low and ZCR is high, might be rap
+                rap_score = 0
+                if avg_rolloff < 3000:  # Lower frequency content
+                    rap_score += 1
+                if avg_zcr > 0.1:  # Higher speech-like characteristics
+                    rap_score += 1
+
+                return rap_score >= 1
+            except:
+                return False
 
         for i in range(len(boundaries) - 1):
             start_time = boundaries[i]
             end_time = boundaries[i + 1]
             section_length = end_time - start_time
 
+            # Extract audio segment for analysis
+            start_sample = int(start_time * sr)
+            end_sample = int(end_time * sr)
+            y_segment = y[start_sample:end_sample]
+
             # Smart labeling based on position in song
             position_ratio = start_time / duration
+            is_rap = detect_rap_section(y_segment, sr)
 
             if i == 0:  # First section
                 label = "Intro"
             elif i == len(boundaries) - 2:  # Last section
                 label = "Outro"
+            elif is_rap:  # Detected rap characteristics
+                label = "Rap"
             elif position_ratio < 0.15:  # Early in song
                 label = "Verse 1"
             elif position_ratio < 0.25:  # After intro
@@ -141,11 +173,28 @@ def segment_track(filepath):
                 label = "Chorus"
             elif position_ratio < 0.6:  # Middle sections
                 if section_length < 25:
-                    label = "Bridge" if i % 2 == 0 else "Breakdown"
+                    # Vary middle section types
+                    existing_labels = [s["label"] for s in segments]
+                    if "Bridge" not in existing_labels:
+                        label = "Bridge"
+                    elif "Breakdown" not in existing_labels:
+                        label = "Breakdown"
+                    else:
+                        label = "Verse 2"
                 else:
                     label = "Verse 2"
             elif position_ratio < 0.8:  # Later sections
-                label = "Chorus" if section_length > 20 else "Pre-Chorus"
+                existing_labels = [s["label"] for s in segments]
+                if section_length > 20:
+                    # Prefer different section types for variety
+                    if "Rap" not in existing_labels and len(segments) >= 4:
+                        label = "Rap"
+                    elif "Bridge" not in existing_labels:
+                        label = "Bridge"
+                    else:
+                        label = "Chorus" if section_length > 30 else "Verse 2"
+                else:
+                    label = "Pre-Chorus"
             else:  # Near end
                 label = "Outro" if section_length < 30 else "Chorus"
 
@@ -155,6 +204,8 @@ def segment_track(filepath):
                     label = label.replace("1", "2") if "1" in label else label + " (Alt)"
                 elif "Chorus" in label:
                     label = "Chorus (Repeat)"
+                elif "Rap" in label:
+                    label = "Rap (Extended)"
                 else:
                     label = label + " (Extended)"
 
