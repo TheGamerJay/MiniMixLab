@@ -45,3 +45,24 @@ export async function getJob(job_id){
 export function mixUrl(mix_id){
   return `${API}/api/mix/file/${mix_id}`;
 }
+
+export async function getProject(){
+  const r = await fetch(`${API}/api/project`); return r.json();
+}
+
+export async function setProject(bpm, key){
+  const r = await fetch(`${API}/api/project`, {
+    method:"POST", headers:{ "Content-Type":"application/json" },
+    body: JSON.stringify({ bpm, key })
+  });
+  return r.json();
+}
+
+export async function autoAlign(file_ids, target_bpm){
+  const r = await fetch(`${API}/api/auto_align`, {
+    method:"POST", headers:{ "Content-Type":"application/json" },
+    body: JSON.stringify({ file_ids, target_bpm })
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}

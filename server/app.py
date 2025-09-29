@@ -1,4 +1,6 @@
 import os, uuid, time, tempfile, subprocess, json, threading, queue
+import numpy as np
+import librosa
 from flask import Flask, request, send_file, jsonify, Response
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit, join_room, leave_room
@@ -17,6 +19,41 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode="eventlet")
 def ffmpeg(*args):
     cmd = ["ffmpeg","-hide_banner","-loglevel","error"] + list(args)
     return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+# --- NEW: simple in-memory stores (you can persist later)
+PROJECT = {"bpm": 120.0, "key": "C"}   # default project tempo/key
+ANALYSIS = {}  # file_id -> {"bpm": float, "key": "Am", "first_beat": seconds}
+
+# --- NEW: helpers
+MAJOR_KEYS = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"]
+MINOR_KEYS = [k+"m" for k in MAJOR_KEYS]
+# Krumhansl key profiles (normalized)
+_K_MAJOR = np.array([6.35,2.23,3.48,2.33,4.38,4.09,2.52,5.19,2.39,3.66,2.29,2.88])
+_K_MINOR = np.array([6.33,2.68,3.52,5.38,2.60,3.53,2.54,4.75,3.98,2.69,3.34,3.17])
+
+def _estimate_key(y, sr):
+    # chroma via CQT then average over time
+    chroma = librosa.feature.chroma_cqt(y=y, sr=sr)
+    chroma = np.mean(chroma, axis=1)  # 12-bin
+    # try all rotations
+    scores_major = [np.corrcoef(np.roll(chroma, -i), _K_MAJOR)[0,1] for i in range(12)]
+    scores_minor = [np.corrcoef(np.roll(chroma, -i), _K_MINOR)[0,1] for i in range(12)]
+    i_maj = int(np.argmax(scores_major))
+    i_min = int(np.argmax(scores_minor))
+    if scores_major[i_maj] >= scores_minor[i_min]:
+        return MAJOR_KEYS[i_maj]             # e.g., "G"
+    else:
+        return MINOR_KEYS[i_min]             # e.g., "Em"
+
+def analyze_audio(path):
+    # downmix & resample for analysis (fast & memory-friendly)
+    y, sr = librosa.load(path, sr=22050, mono=True)
+    # beat tracking
+    tempo, beats = librosa.beat.beat_track(y=y, sr=sr, units="time")
+    first_beat = float(beats[0]) if len(beats) else 0.0
+    # key estimate
+    key = _estimate_key(y, sr)
+    return float(tempo), key, first_beat
 
 # ---- SECTIONS (global defaults; you can persist per-project if you want)
 SECTIONS = [
@@ -45,6 +82,51 @@ def set_sections():
     ]
     return jsonify({"ok": True, "sections": SECTIONS})
 
+# --- NEW: project settings endpoints
+@app.get("/api/project")
+def get_project():
+    return jsonify(PROJECT)
+
+@app.post("/api/project")
+def set_project():
+    data = request.get_json(force=True)
+    if "bpm" in data: PROJECT["bpm"] = float(data["bpm"])
+    if "key" in data: PROJECT["key"] = str(data["key"])
+    return jsonify(PROJECT)
+
+# --- NEW: auto-align endpoint
+# body: { "file_ids": ["..",".."] }
+@app.post("/api/auto_align")
+def auto_align():
+    data = request.get_json(force=True)
+    ids = data.get("file_ids", [])
+    if not ids: return jsonify({"error":"file_ids required"}), 400
+    target_bpm = float(data.get("target_bpm", PROJECT["bpm"]))
+
+    result = []
+    for fid in ids:
+        a = ANALYSIS.get(fid)
+        if not a:
+            # fallback analyze on the fly
+            p = os.path.join(STORE, fid)
+            if not os.path.exists(p):
+                return jsonify({"error": f"missing {fid}"}), 400
+            bpm, key, first_beat = analyze_audio(p)
+            a = ANALYSIS[fid] = {"bpm": bpm, "key": key, "first_beat": first_beat}
+
+        src_bpm = max(a.get("bpm", 0.0), 1e-6)
+        speed = target_bpm / src_bpm         # >1.0 = speed up, <1.0 = slow down
+        # Align first downbeat to project grid start (offset compensates lead-in)
+        offset = -float(a.get("first_beat", 0.0))
+        result.append({
+            "file_id": fid,
+            "detected_bpm": a["bpm"],
+            "detected_key": a["key"],
+            "suggested_speed": float(speed),
+            "suggested_offset": float(max(0.0, offset)),  # don't go negative in this simple model
+        })
+    return jsonify({"target_bpm": target_bpm, "tracks": result})
+
 # ---- upload
 @app.post("/api/upload")
 def upload():
@@ -54,12 +136,23 @@ def upload():
     fid = str(uuid.uuid4()) + ext
     path = os.path.join(STORE, fid)
     f.save(path)
+
+    # duration probe
     pr = subprocess.run(
         ["ffprobe","-v","error","-show_entries","format=duration","-of","json",path],
         stdout=subprocess.PIPE
     )
     meta = json.loads(pr.stdout or b"{}")
-    return jsonify({"file_id": fid, "duration": float(meta.get("format",{}).get("duration",0))})
+    duration = float(meta.get("format",{}).get("duration",0))
+
+    # NEW: audio analysis (tempo/key/first beat)
+    try:
+        bpm, key, first_beat = analyze_audio(path)
+    except Exception as e:
+        bpm, key, first_beat = 0.0, "Unknown", 0.0
+
+    ANALYSIS[fid] = {"bpm": bpm, "key": key, "first_beat": first_beat, "duration": duration}
+    return jsonify({"file_id": fid, "duration": duration, "analysis": ANALYSIS[fid]})
 
 # ---- memory-safe preview slice
 @app.get("/api/preview")

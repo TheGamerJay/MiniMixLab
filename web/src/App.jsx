@@ -1,138 +1,177 @@
 import { useEffect, useRef, useState } from "react";
 import io from "socket.io-client";
-import { uploadFile, previewUrl, fetchSections, startMix, getJob, mixUrl } from "./api";
+import { uploadFile, previewUrl, fetchSections, startMix, getJob, mixUrl,
+         getProject, setProject, autoAlign } from "./api";
 import ErrorBoundary from "./ErrorBoundary";
-import logoImage from "./assets/MiniMixLabLogo.png";
 
 const API = import.meta.env.VITE_API || "";
 
 function AppInner(){
   const audioRef = useRef(null);
   const [socket, setSocket] = useState(null);
-  const [room, setRoom] = useState(crypto.randomUUID());
-  const [uploaded, setUploaded] = useState([]);
-  const [active, setActive] = useState(null);
+  const [room] = useState(crypto.randomUUID());
+
+  const [uploaded, setUploaded] = useState([]); // {file_id,name,duration,analysis?}
+  const [tracks, setTracks]   = useState([]);   // render model: {file_id, offset, gain, speed}
+  const [active, setActive]   = useState(null);
+
   const [sections, setSections] = useState([]);
-  const [speed, setSpeed] = useState(1.0);
+  const [project, setProjectState] = useState({ bpm: 120, key: "C" });
+
   const [progress, setProgress] = useState({show:false, pct:0, msg:""});
 
+  // sockets
   useEffect(() => {
-    // socket
     const s = io(API, { transports: ["websocket"] });
-    s.on("connect", () => { s.emit("join", room); });
+    s.on("connect", () => s.emit("join", room));
     s.on("mix_progress", (p) => setProgress(x => ({...x, pct: p.percent, msg: p.message})));
     setSocket(s);
-    return () => { s.close(); };
+    return () => s.close();
   }, [room]);
 
+  // sections + project
   useEffect(() => { (async () => {
-    const { sections } = await fetchSections();
-    setSections(sections);
+    const { sections } = await fetchSections(); setSections(sections);
+    const p = await getProject(); setProjectState(p);
   })(); }, []);
 
   function playSlice(sec){
     if(!active) return;
-    const url = previewUrl(active.file_id, sec.start, sec.end, speed);
-    const el = audioRef.current;
-    el.src = url; el.load(); el.play();
+    const url = previewUrl(active.file_id, sec.start, sec.end, 1.0);
+    const el = audioRef.current; el.src = url; el.load(); el.play();
   }
 
   async function onUpload(e){
     const file = e.target.files?.[0]; if(!file) return;
     const meta = await uploadFile(file);
-    const item = { ...meta, name: file.name };
+    const item = { ...meta, name: file.name }; // meta.analysis contains bpm/key/first_beat
     setUploaded(u => [...u, item]);
     setActive(item);
+    setTracks(t => [...t, { file_id: item.file_id, offset: 0, gain: -3, speed: 1.0 }]);
+  }
+
+  async function applyAutoAlign(){
+    if (uploaded.length === 0) return;
+    const file_ids = uploaded.map(x => x.file_id);
+    const { tracks: aligned } = await autoAlign(file_ids, project.bpm);
+    // merge back into our track model
+    setTracks(prev =>
+      prev.map(tr => {
+        const rec = aligned.find(a => a.file_id === tr.file_id);
+        return rec ? { ...tr, speed: rec.suggested_speed, offset: rec.suggested_offset } : tr;
+      })
+    );
   }
 
   async function onRender(){
-    if (uploaded.length === 0) return;
+    if (tracks.length === 0) return;
     setProgress({show:true, pct:1, msg:"Queued"});
-    // simple: mix all uploaded tracks aligned at 0
-    const tracks = uploaded.map((t) => ({
-      file_id: t.file_id, offset: 0, gain: -3, speed: 1.0
-    }));
     const { job_id } = await startMix(tracks, room);
-
-    // poll for completion (backend also streams progress over socket)
     const timer = setInterval(async () => {
       const j = await getJob(job_id);
       if (j.status === "done") {
-        clearInterval(timer);
-        setProgress({show:false, pct:100, msg:"Done"});
+        clearInterval(timer); setProgress({show:false, pct:100, msg:"Done"});
         window.open(mixUrl(j.result), "_blank");
       } else if (j.status === "error") {
-        clearInterval(timer);
-        alert("Mix failed:\n" + j.result);
-        setProgress({show:false, pct:0, msg:""});
+        clearInterval(timer); setProgress({show:false, pct:0, msg:""}); alert("Mix failed:\n"+j.result);
       }
     }, 1000);
   }
 
+  async function updateProjectBPM(e){
+    const bpm = +e.target.value;
+    const p = await setProject(bpm, project.key);
+    setProjectState(p);
+  }
+
   return (
     <div className="min-h-screen bg-[#0b0b11] text-slate-100 p-6">
-      <div className="flex flex-col items-center gap-2 mb-6">
+      <div className="flex items-center justify-between">
         <h1 className="text-3xl font-bold">MiniMixLab</h1>
-        <img
-          src={logoImage}
-          alt="MiniMixLab Logo"
-          className="h-32 w-auto"
-          onError={(e) => {
-            // Hide logo if it fails to load
-            console.log('Logo failed to load:', e.target.src);
-            e.target.style.display = 'none';
-          }}
-        />
         <div className="text-sm opacity-70">Room: {room.slice(0,8)}</div>
       </div>
 
-      <div className="mt-4 flex gap-3 items-center flex-wrap">
+      <div className="mt-4 flex flex-wrap gap-3 items-center">
         <input type="file" accept="audio/*" onChange={onUpload}/>
-        <label className="ml-2">Speed</label>
-        <input type="number" step="0.05" value={speed} onChange={e=>setSpeed(+e.target.value)} className="text-black w-24 p-1 rounded"/>
-        <button className="px-3 py-2 rounded bg-cyan-500/20 hover:bg-cyan-500/30" onClick={onRender}>Render Mix</button>
+        <label>Project BPM</label>
+        <input type="number" className="text-black w-24" value={project.bpm} onChange={updateProjectBPM}/>
+        <button className="px-3 py-2 rounded bg-cyan-500/20" onClick={applyAutoAlign}>Auto-Align</button>
+        <button className="px-3 py-2 rounded bg-cyan-500/20" onClick={onRender}>Render Mix</button>
       </div>
 
-      <div className="mt-6">
-        <h3 className="font-semibold mb-2">Sections</h3>
-        <div className="flex flex-wrap gap-2">
-          {sections.map((s, i)=>(
-            <button key={i} onClick={()=>playSlice(s)}
-              className="px-3 py-2 rounded-xl bg-white/5 hover:bg-white/10 transition-colors">
-              {s.label} ({s.start}-{s.end}s)
-            </button>
-          ))}
+      <div className="mt-6 grid md:grid-cols-2 gap-6">
+        <div>
+          <h3 className="font-semibold mb-2">Sections</h3>
+          <div className="flex flex-wrap gap-2">
+            {sections.map((s, i)=>(
+              <button key={i} onClick={()=>playSlice(s)}
+                className="px-3 py-2 rounded-xl bg-white/5 hover:bg-white/10">
+                {s.label} ({s.start}-{s.end}s)
+              </button>
+            ))}
+          </div>
+
+          <div className="mt-6">
+            <audio ref={audioRef} controls preload="none" className="w-full"/>
+          </div>
+        </div>
+
+        <div>
+          <h3 className="font-semibold mb-2">Stems (detected)</h3>
+          <ul className="space-y-2">
+            {uploaded.map(u => (
+              <li key={u.file_id} className="bg-white/5 rounded p-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="font-mono">{u.name}</div>
+                    {u.analysis && (
+                      <div className="text-xs opacity-80">
+                        BPM: {u.analysis.bpm.toFixed(1)} • Key: {u.analysis.key} • First beat: {u.analysis.first_beat.toFixed(2)}s
+                      </div>
+                    )}
+                  </div>
+                  <button className="underline" onClick={()=>setActive(u)}>Preview</button>
+                </div>
+                {/* track controls */}
+                <div className="mt-2 grid grid-cols-3 gap-2 text-sm">
+                  {(() => {
+                    const t = tracks.find(x => x.file_id === u.file_id);
+                    if (!t) return null;
+                    return (
+                      <>
+                        <label>Offset (s)
+                          <input type="number" step="0.05" className="text-black w-full"
+                                 value={t.offset}
+                                 onChange={e=>setTracks(xs=>xs.map(x=>x.file_id===u.file_id?{...x,offset:+e.target.value}:x))}/>
+                        </label>
+                        <label>Speed
+                          <input type="number" step="0.01" className="text-black w-full"
+                                 value={t.speed}
+                                 onChange={e=>setTracks(xs=>xs.map(x=>x.file_id===u.file_id?{...x,speed:+e.target.value}:x))}/>
+                        </label>
+                        <label>Gain (dB)
+                          <input type="number" step="0.5" className="text-black w-full"
+                                 value={t.gain}
+                                 onChange={e=>setTracks(xs=>xs.map(x=>x.file_id===u.file_id?{...x,gain:+e.target.value}:x))}/>
+                        </label>
+                      </>
+                    );
+                  })()}
+                </div>
+              </li>
+            ))}
+          </ul>
         </div>
       </div>
 
-      <div className="mt-6">
-        <audio ref={audioRef} controls preload="none" className="w-full"/>
-      </div>
-
-      <div className="mt-6">
-        <h3 className="font-semibold mb-2">Uploaded</h3>
-        <ul className="space-y-1">
-          {uploaded.map(f => (
-            <li key={f.file_id} className="flex items-center gap-2">
-              <button className="underline hover:text-cyan-400" onClick={()=>setActive(f)}>{f.name}</button>
-              <span className="opacity-60">— {Math.round(f.duration||0)}s</span>
-              {active?.file_id === f.file_id && <span className="text-cyan-400 text-xs">● active</span>}
-            </li>
-          ))}
-        </ul>
-      </div>
-
       {progress.show && (
-        <div className="fixed inset-0 bg-black/60 grid place-items-center z-50">
-          <div className="bg-[#111] p-6 rounded-xl w-[420px] border border-white/10">
-            <div className="mb-2 font-semibold">Rendering… {progress.pct}%</div>
-            <div className="h-3 bg-white/10 rounded-full overflow-hidden">
-              <div
-                className="h-3 bg-gradient-to-r from-cyan-400 to-blue-500 rounded-full transition-all duration-300"
-                style={{ width: `${progress.pct}%` }}
-              />
+        <div className="fixed inset-0 bg-black/60 grid place-items-center">
+          <div className="bg-[#111] p-6 rounded-xl w-[420px]">
+            <div className="mb-2">Rendering… {progress.pct}%</div>
+            <div className="h-2 bg-white/10 rounded">
+              <div className="h-2 bg-cyan-400 rounded" style={{ width: `${progress.pct}%` }} />
             </div>
-            <div className="mt-2 text-sm opacity-70">{progress.msg}</div>
+            <div className="mt-2 text-xs opacity-70">{progress.msg}</div>
           </div>
         </div>
       )}
@@ -140,10 +179,4 @@ function AppInner(){
   );
 }
 
-export default function App(){
-  return (
-    <ErrorBoundary>
-      <AppInner/>
-    </ErrorBoundary>
-  );
-}
+export default function App(){ return <ErrorBoundary><AppInner/></ErrorBoundary>; }
