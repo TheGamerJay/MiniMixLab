@@ -226,7 +226,7 @@ function injectDemo(){
 }
 
 return (
-    <div className="wrap">
+    <div className="wrap" style={{position:"relative"}}><div style={{position:"fixed",left:12,bottom:12,background:"#223",color:"#fff",padding:"6px 10px",borderRadius:8,zIndex:99998,fontFamily:"system-ui"}}>React content rendered</div>
       {/* Debug banner INSIDE the root (keeps one JSX parent) */}
       <div style={{background:"#0b0f1a",color:"#fff",padding:"8px 12px",fontFamily:"system-ui",position:"sticky",top:0,zIndex:9999}}>
         UI LOADED   if you see this, React mounted.
@@ -332,6 +332,7 @@ return (
     </div>
   );
 }
+
 
 
 
