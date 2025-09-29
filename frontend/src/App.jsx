@@ -59,7 +59,18 @@ export default function App() {
         padding: "24px",
       }}
     >
-      <h1 style={{ color: "indigo", fontSize: "2rem" }}> MiniMixLab</h1>
+      <div style={{ display: "flex", alignItems: "center", gap: "16px", marginBottom: "8px" }}>
+        <img
+          src="/logo.svg"
+          alt="MiniMixLab Logo"
+          style={{ height: "40px", width: "auto" }}
+          onError={(e) => {
+            // Fallback if logo doesn't exist - hide gracefully
+            e.target.style.display = 'none';
+          }}
+        />
+        <h1 style={{ color: "indigo", fontSize: "2rem", margin: "0" }}>MiniMixLab</h1>
+      </div>
       <p style={{ color: "pink", fontSize: "1.1rem" }}>UI is working  React is mounted.</p>
 
       <div style={{ display: "flex", gap: "12px" }}>
