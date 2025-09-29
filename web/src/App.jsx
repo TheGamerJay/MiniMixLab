@@ -203,9 +203,9 @@ function AppInner(){
 
   return (
     <div className="min-h-screen bg-[#0b0b11] text-slate-100 p-6">
-      <div className="flex items-center gap-4 mb-6">
-        <img src={logoImage} alt="MiniMixLab Logo" className="h-12 w-auto" />
-        <h1 className="text-3xl font-bold">MiniMixLab</h1>
+      <div className="flex flex-col items-center mb-6">
+        <img src={logoImage} alt="MiniMixLab Logo" className="h-32 w-auto" />
+        <h1 className="text-3xl font-bold text-center">MiniMixLab</h1>
       </div>
 
       <div className="mt-4 flex flex-wrap gap-3 items-center text-sm">
