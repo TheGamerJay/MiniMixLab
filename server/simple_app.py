@@ -4,6 +4,11 @@ import librosa
 from flask import Flask, request, send_file, jsonify, Response, send_from_directory
 from flask_cors import CORS
 
+# Environment configuration
+NODE_ENV = os.environ.get("NODE_ENV", "development")
+CORS_ORIGIN = os.environ.get("CORS_ORIGIN", "*")
+API_URL = os.environ.get("API_URL", "/api")
+
 BASE = os.path.dirname(__file__)
 STORE = os.path.join(BASE, "storage")
 MIXES = os.path.join(BASE, "mixes")
@@ -11,8 +16,14 @@ os.makedirs(STORE, exist_ok=True)
 os.makedirs(MIXES, exist_ok=True)
 
 app = Flask(__name__)
-CORS(app, supports_credentials=True)
-app.config["SECRET_KEY"] = "dev_key"
+
+# Configure CORS based on environment
+if CORS_ORIGIN == "*":
+    CORS(app, supports_credentials=True)
+else:
+    CORS(app, origins=CORS_ORIGIN.split(","), supports_credentials=True)
+
+app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev_key")
 
 def ffmpeg(*args):
     cmd = ["ffmpeg","-hide_banner","-loglevel","error"] + list(args)
@@ -226,9 +237,14 @@ def serve_static_files(path):
 
 if __name__ == "__main__":
     print("Starting MiniMixLab server...")
+    print(f"Environment: {NODE_ENV}")
     print(f"Storage: {STORE}")
     print(f"Mixes: {MIXES}")
+    print(f"CORS Origin: {CORS_ORIGIN}")
+    print(f"API URL: {API_URL}")
     print(f"Rubber Band available: {has_rubberband()}")
 
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=False)
+    debug_mode = NODE_ENV == "development"
+
+    app.run(host="0.0.0.0", port=port, debug=debug_mode)

@@ -33,7 +33,10 @@ RUN mkdir -p /app/server/storage /app/server/mixes
 
 # Env
 ENV PORT=8080 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    NODE_ENV=production \
+    CORS_ORIGIN=* \
+    API_URL=/api
 
 EXPOSE 8080
 
