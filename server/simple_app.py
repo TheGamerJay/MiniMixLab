@@ -3,6 +3,7 @@ import numpy as np
 import librosa
 from flask import Flask, request, send_file, jsonify, Response, send_from_directory
 from flask_cors import CORS
+from segmentation import segment_and_label, map_letters_to_music_labels
 
 # Environment configuration
 NODE_ENV = os.environ.get("NODE_ENV", "development")
@@ -54,173 +55,27 @@ def analyze_track(filepath):
         return {"bpm": 120.0, "key": "C", "first_beat": 0.0}
 
 def segment_track(filepath):
+    """
+    Advanced segmentation using multi-scale novelty detection + spectral clustering
+    """
     try:
-        y, sr = librosa.load(filepath)
-        duration = librosa.get_duration(y=y, sr=sr)
+        # Load audio
+        y, sr = librosa.load(filepath, sr=22050, mono=True)
 
-        # Advanced segmentation using spectral and rhythmic analysis
+        # Get detected tempo for context
+        tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
 
-        # 1. Extract features for segmentation
-        hop_length = 512
-        frame_length = 2048
+        # Use the new segmentation algorithm
+        segments = segment_and_label(y, sr, min_seg_s=7.0, target_clusters=(3, 6), tempo=tempo)
 
-        # Spectral features
-        mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13, hop_length=hop_length)
-        chroma = librosa.feature.chroma_stft(y=y, sr=sr, hop_length=hop_length)
-        spectral_centroid = librosa.feature.spectral_centroid(y=y, sr=sr, hop_length=hop_length)
+        # Map A/B/C labels to musical section names
+        musical_segments = map_letters_to_music_labels(segments, detected_tempo=tempo)
 
-        # Energy and rhythm features
-        rms_energy = librosa.feature.rms(y=y, hop_length=hop_length)
-        tempo, beats = librosa.beat.beat_track(y=y, sr=sr, hop_length=hop_length)
-
-        # 2. Detect structural changes using spectral clustering
-        # Combine features for similarity matrix
-        features = np.vstack([
-            np.mean(mfcc, axis=0),
-            np.mean(chroma, axis=0),
-            np.mean(spectral_centroid, axis=0),
-            np.mean(rms_energy, axis=0)
-        ])
-
-        # 3. Find segment boundaries using novelty detection
-        # Use onset detection for potential boundaries
-        onset_frames = librosa.onset.onset_detect(y=y, sr=sr, hop_length=hop_length, units='time')
-
-        # 4. Intelligent boundary selection
-        boundaries = []
-
-        # Always start with 0
-        boundaries.append(0.0)
-
-        # Add boundaries based on energy changes and beat alignment
-        if len(onset_frames) > 0:
-            # Group onsets into potential sections
-            min_section_length = 15.0  # Minimum 15 seconds per section
-
-            for onset_time in onset_frames:
-                if onset_time > min_section_length and onset_time < duration - min_section_length:
-                    # Check if this is a significant boundary
-                    if len(boundaries) == 0 or onset_time - boundaries[-1] >= min_section_length:
-                        boundaries.append(float(onset_time))
-
-        # Ensure we don't have too many boundaries
-        if len(boundaries) > 8:  # Max 8 sections
-            # Keep the most significant boundaries
-            boundaries = boundaries[:8]
-
-        # Always end with duration
-        if boundaries[-1] < duration - 5:  # If last boundary is more than 5s from end
-            boundaries.append(duration)
-        else:
-            boundaries[-1] = duration
-
-        # 5. Intelligent labeling based on position and characteristics
-        segments = []
-
-        # Analyze each segment for rap characteristics
-        def detect_rap_section(y_segment, sr):
-            """Detect if a segment is likely a rap section based on audio features"""
-            try:
-                # Extract features that indicate rap
-                tempo, _ = librosa.beat.beat_track(y=y_segment, sr=sr)
-                spectral_rolloff = librosa.feature.spectral_rolloff(y=y_segment, sr=sr)
-                zero_crossing_rate = librosa.feature.zero_crossing_rate(y_segment)
-
-                # Rap characteristics:
-                # - Often has lower spectral rolloff (more bass/mid frequencies)
-                # - Higher zero crossing rate (more speech-like)
-                # - Often different tempo patterns
-
-                avg_rolloff = np.mean(spectral_rolloff)
-                avg_zcr = np.mean(zero_crossing_rate)
-
-                # Simple heuristic: if spectral rolloff is low and ZCR is high, might be rap
-                rap_score = 0
-                if avg_rolloff < 3000:  # Lower frequency content
-                    rap_score += 1
-                if avg_zcr > 0.1:  # Higher speech-like characteristics
-                    rap_score += 1
-
-                return rap_score >= 1
-            except:
-                return False
-
-        for i in range(len(boundaries) - 1):
-            start_time = boundaries[i]
-            end_time = boundaries[i + 1]
-            section_length = end_time - start_time
-
-            # Extract audio segment for analysis
-            start_sample = int(start_time * sr)
-            end_sample = int(end_time * sr)
-            y_segment = y[start_sample:end_sample]
-
-            # Smart labeling based on position in song
-            position_ratio = start_time / duration
-            is_rap = detect_rap_section(y_segment, sr)
-
-            if i == 0:  # First section
-                label = "Intro"
-            elif i == len(boundaries) - 2:  # Last section
-                label = "Outro"
-            elif is_rap:  # Detected rap characteristics
-                label = "Rap"
-            elif position_ratio < 0.15:  # Early in song
-                label = "Verse 1"
-            elif position_ratio < 0.25:  # After intro
-                label = "Pre-Chorus" if section_length < 20 else "Verse 1"
-            elif position_ratio < 0.4:  # First major section
-                label = "Chorus"
-            elif position_ratio < 0.6:  # Middle sections
-                if section_length < 25:
-                    # Vary middle section types
-                    existing_labels = [s["label"] for s in segments]
-                    if "Bridge" not in existing_labels:
-                        label = "Bridge"
-                    elif "Breakdown" not in existing_labels:
-                        label = "Breakdown"
-                    else:
-                        label = "Verse 2"
-                else:
-                    label = "Verse 2"
-            elif position_ratio < 0.8:  # Later sections
-                existing_labels = [s["label"] for s in segments]
-                if section_length > 20:
-                    # Prefer different section types for variety
-                    if "Rap" not in existing_labels and len(segments) >= 4:
-                        label = "Rap"
-                    elif "Bridge" not in existing_labels:
-                        label = "Bridge"
-                    else:
-                        label = "Chorus" if section_length > 30 else "Verse 2"
-                else:
-                    label = "Pre-Chorus"
-            else:  # Near end
-                label = "Outro" if section_length < 30 else "Chorus"
-
-            # Ensure no duplicate consecutive labels
-            if segments and segments[-1]["label"] == label:
-                if "Verse" in label:
-                    label = label.replace("1", "2") if "1" in label else label + " (Alt)"
-                elif "Chorus" in label:
-                    label = "Chorus (Repeat)"
-                elif "Rap" in label:
-                    label = "Rap (Extended)"
-                else:
-                    label = label + " (Extended)"
-
-            segments.append({
-                "start": float(start_time),
-                "end": float(end_time),
-                "label": label,
-                "confidence": 0.75 + (0.2 if section_length > 15 else 0)
-            })
-
-        return segments
+        return musical_segments
 
     except Exception as e:
-        print(f"Advanced segmentation error: {e}")
-        # Fallback to basic segmentation
+        print(f"Advanced segmentation failed: {e}, using fallback")
+        # Fallback: basic segmentation
         try:
             duration = librosa.get_duration(filename=filepath)
             segment_duration = duration / 4
