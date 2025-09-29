@@ -37,7 +37,8 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#0b0b11] text-slate-100 p-6">
-      <div className="flex items-center gap-4 mb-6">
+      <div className="flex flex-col items-center gap-2 mb-6">
+        <h1 className="text-3xl font-bold">MiniMixLab</h1>
         <img
           src={logoImage}
           alt="MiniMixLab Logo"
@@ -47,7 +48,6 @@ export default function App() {
             e.target.style.display = 'none';
           }}
         />
-        <h1 className="text-3xl font-bold">MiniMixLab</h1>
       </div>
 
       <div className="space-x-3 mb-4">
