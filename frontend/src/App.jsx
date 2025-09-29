@@ -1,7 +1,5 @@
 ﻿import React, { useState } from "react";
-
-// Try to import logo from public directory
-const logoPath = "/MiniMixLabLogo.png";
+import logoImage from "./assets/MiniMixLabLogo.png";
 
 export default function App() {
   console.log("MiniMixLab: Clean reset App mounted");
@@ -64,18 +62,13 @@ export default function App() {
     >
       <div style={{ display: "flex", alignItems: "center", gap: "16px", marginBottom: "8px" }}>
         <img
-          src={logoPath}
+          src={logoImage}
           alt="MiniMixLab Logo"
           style={{ height: "40px", width: "auto" }}
           onError={(e) => {
-            // Fallback to try other logo files
-            if (e.target.src.includes('MiniMixLabLogo.png')) {
-              e.target.src = '/logo.svg';
-            } else if (e.target.src.includes('logo.svg')) {
-              e.target.src = '/logo.png';
-            } else {
-              e.target.style.display = 'none';
-            }
+            // Hide logo if it fails to load
+            console.log('Logo failed to load:', e.target.src);
+            e.target.style.display = 'none';
           }}
         />
         <h1 style={{ color: "indigo", fontSize: "2rem", margin: "0" }}>MiniMixLab</h1>
