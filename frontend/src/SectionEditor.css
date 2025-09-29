@@ -194,3 +194,5 @@ body, html { background:#0b0f1a !important; color:#fff !important; }
 #root .overlay, #root .backdrop, #root [data-overlay], #root [role=dialog] {
   display:none !important; opacity:0 !important; pointer-events:none !important;
 }
+
+.chip.playing{box-shadow:0 0 0 2px #ff69b4a0 inset,0 0 12px #ff69b450; transform:translateY(-1px)}
