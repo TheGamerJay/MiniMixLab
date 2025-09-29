@@ -36,7 +36,18 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#0b0b11] text-slate-100 p-6">
-      <h1 className="text-3xl font-bold mb-4">MiniMixLab (Real)</h1>
+      <div className="flex items-center gap-4 mb-6">
+        <img
+          src="/logo-placeholder.svg"
+          alt="MiniMixLab Logo"
+          className="h-10 w-auto"
+          onError={(e) => {
+            // Fallback if logo doesn't exist
+            e.target.style.display = 'none';
+          }}
+        />
+        <h1 className="text-3xl font-bold">MiniMixLab</h1>
+      </div>
 
       <div className="space-x-3 mb-4">
         <input type="file" accept="audio/*" onChange={onUpload} />

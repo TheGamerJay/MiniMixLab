@@ -251,7 +251,11 @@ def serve_frontend():
 @app.route("/<path:filename>")
 def serve_static(filename):
     static_dir = os.path.join(BASE, "static")
-    return send_file(os.path.join(static_dir, filename))
+    file_path = os.path.join(static_dir, filename)
+    if os.path.exists(file_path):
+        return send_file(file_path)
+    # If file not found in static, return 404
+    return jsonify({"error": "File not found"}), 404
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
