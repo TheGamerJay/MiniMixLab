@@ -1,4 +1,4 @@
-# ---------- Frontend build ----------
+﻿# ---------- Frontend build ----------
 FROM node:20-slim AS web
 WORKDIR /app/frontend
 
@@ -27,7 +27,8 @@ COPY backend/ /app/backend/
 COPY --from=web /app/frontend_dist /app/frontend_dist
 
 # Python deps
-RUN pip install --no-cache-dir -r /app/backend/requirements.txt
+RUN set -eux; for i in 1 2 3 4 5; do \
+pip install --no-cache-dir --default-timeout=120 -r /app/backend/requirements.txt && break || (echo "pip attempt $i failed"; sleep 5); done
 
 # Env
 ENV HOST=0.0.0.0 \
@@ -43,3 +44,4 @@ HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
 
 # Run API (serves UI too)
 CMD ["bash","-lc","cd /app/backend && uvicorn main:app --host ${HOST} --port ${PORT}"]
+
