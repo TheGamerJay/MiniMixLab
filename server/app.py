@@ -55,6 +55,105 @@ def analyze_audio(path):
     key = _estimate_key(y, sr)
     return float(tempo), key, first_beat
 
+def segment_song(path, sr=22050, k_segments=8):
+    """
+    Returns a list of segments: [{start, end, label, confidence}]
+    Uses librosa structural segmentation (recurrence matrix + clustering).
+    """
+    y, sr = librosa.load(path, sr=sr, mono=True)
+    # Beat-synchronous chroma for structure
+    tempo, beats = librosa.beat.beat_track(y=y, sr=sr, units='frames')
+    if len(beats) < 4:
+        # Fallback: uniform chunks of ~15s
+        dur = librosa.get_duration(y=y, sr=sr)
+        step = max(10.0, dur / k_segments)
+        segs = []
+        t = 0.0
+        while t < dur:
+            segs.append({"start": t, "end": min(t+step, dur), "label": "Section", "confidence": 0.3})
+            t += step
+        return segs
+
+    C = librosa.feature.chroma_cqt(y=y, sr=sr)
+    # Beat-sync chroma
+    C_sync = librosa.util.sync(C, librosa.beat.beat_track(y=y, sr=sr)[1])
+    R = librosa.segment.recurrence_matrix(C_sync, sym=True, mode='affinity', metric='cosine')
+    # Path enhancement to emphasize diagonals (repeated structure)
+    Rf = librosa.segment.path_enhance(R, diagonal=True)
+    # Laplacian segmentation to k segments
+    seg_ids = librosa.segment.agglomerative(Rf, k=k_segments)
+    # Map beat indices to times
+    beat_times = librosa.frames_to_time(librosa.beat.beat_track(y=y, sr=sr)[1], sr=sr)
+    # Build continuous ranges for each cluster id
+    boundaries = [0]
+    for i in range(1, len(seg_ids)):
+        if seg_ids[i] != seg_ids[i-1]:
+            boundaries.append(i)
+    boundaries.append(len(seg_ids)-1)
+
+    # Convert to times
+    segments = []
+    for i in range(len(boundaries)-1):
+        b0 = boundaries[i]
+        b1 = boundaries[i+1]
+        start = float(beat_times[b0]) if b0 < len(beat_times) else 0.0
+        end = float(beat_times[b1]) if b1 < len(beat_times) else float(librosa.get_duration(y=y, sr=sr))
+        if end - start < 2.5:  # drop ultra-short blips
+            continue
+        segments.append({"start": start, "end": end})
+
+    # Labeling heuristic:
+    # - Most repeated chroma pattern → "Chorus"
+    # - First low-energy → "Intro"
+    # - Last high-energy unique → "Bridge"
+    # - Others → "Verse"
+    # Compute energy per segment and a crude repetition score
+    S = np.abs(librosa.stft(y))
+    rms = librosa.feature.rms(S=S, frame_length=2048, hop_length=512).flatten()
+    t_frames = librosa.frames_to_time(np.arange(len(rms)), sr=sr, hop_length=512)
+    def seg_energy(s,e):
+        idx = np.where((t_frames>=s)&(t_frames<e))[0]
+        return float(np.mean(rms[idx])) if len(idx) else 0.0
+
+    # Chroma mean per segment for repetition similarity
+    def seg_chroma_sim(s,e):
+        f0 = librosa.time_to_frames(s, sr=sr)
+        f1 = librosa.time_to_frames(e, sr=sr)
+        c = C[:, max(0,f0):min(C.shape[1],f1)]
+        return np.mean(c, axis=1) if c.size else np.zeros((12,))
+
+    chroma_means = [seg_chroma_sim(s["start"], s["end"]) for s in segments]
+    # Pairwise cosine sims
+    sims = np.zeros((len(segments),len(segments)))
+    for i in range(len(segments)):
+        for j in range(len(segments)):
+            a, b = chroma_means[i], chroma_means[j]
+            if np.linalg.norm(a)==0 or np.linalg.norm(b)==0:
+                sims[i,j]=0
+            else:
+                sims[i,j]= float(np.dot(a,b)/(np.linalg.norm(a)*np.linalg.norm(b)))
+    rep_score = np.sum(sims, axis=1)  # how much it repeats overall
+
+    energies = [seg_energy(s["start"], s["end"]) for s in segments]
+
+    # Pick labels
+    if segments:
+        chorus_idx = int(np.argmax(rep_score))
+        intro_idx = int(np.argmin(np.abs([s["start"] for s in segments])))  # earliest
+        bridge_idx = int(np.argmin(rep_score))  # least-repeating
+        # Assign
+        for i, s in enumerate(segments):
+            label = "Verse"
+            conf = 0.6
+            if i == chorus_idx: label, conf = "Chorus", 0.9
+            if i == intro_idx and s["start"] < (segments[0]["end"]-segments[0]["start"])*1.5:
+                label, conf = "Intro", 0.8
+            if i == bridge_idx and i not in (chorus_idx, intro_idx):
+                label, conf = "Bridge", 0.7
+            s["label"] = label
+            s["confidence"] = conf
+    return segments
+
 # ---- SECTIONS (global defaults; you can persist per-project if you want)
 SECTIONS = [
     {"label": "Intro",   "start": 0,   "end": 30},
@@ -126,6 +225,67 @@ def auto_align():
             "suggested_offset": float(max(0.0, offset)),  # don't go negative in this simple model
         })
     return jsonify({"target_bpm": target_bpm, "tracks": result})
+
+@app.get("/api/segment")
+def api_segment():
+    fid = request.args.get("file_id")
+    if not fid: return jsonify({"error":"file_id required"}), 400
+    src = os.path.join(STORE, fid)
+    if not os.path.exists(src): return jsonify({"error":"not found"}), 404
+    segs = segment_song(src, k_segments=8)
+    return jsonify({"file_id": fid, "segments": segs})
+
+# body: { "pieces": [ { "file_id": "...", "start": float, "end": float, "speed": 1.0, "gain": -3.0 } ],
+#         "xfade_ms": 200 }
+@app.post("/api/render_arrangement")
+def render_arrangement():
+    payload = request.get_json(force=True)
+    pieces = payload.get("pieces", [])
+    xfade_ms = int(payload.get("xfade_ms", 200))
+    if not pieces: return jsonify({"error":"no pieces"}), 400
+
+    # Build a filtergraph that trims each slice, speeds, gains, then concatenates with acrossfades
+    inputs = []
+    filters = []
+    outs = []
+    for i, p in enumerate(pieces):
+        src = os.path.join(STORE, p["file_id"])
+        if not os.path.exists(src): return jsonify({"error": f"missing {p['file_id']}"}), 400
+        inputs += ["-i", src]
+        lbl = f"s{i}"
+        start = float(p.get("start", 0.0))
+        end   = float(p.get("end", start+10.0))
+        speed = float(p.get("speed", 1.0))
+        gain  = float(p.get("gain", 0.0))
+        # chain atempo safely
+        sp = speed; chain=[]
+        while sp<0.5 or sp>2.0:
+            step = 2.0 if sp>2.0 else 0.5
+            chain.append(f"atempo={step}"); sp = sp/step if sp>2.0 else sp/0.5
+        chain.append(f"atempo={sp}")
+        filters.append(
+            f"[{i}:a] atrim={start}:{end}, asetpts=PTS-STARTPTS, {','.join(chain)}, volume={10**(gain/20):.6f} [{lbl}]"
+        )
+        outs.append(f"[{lbl}]")
+
+    # Chain acrossfade between consecutive segments
+    cur = outs[0]
+    acc_filters = []
+    for i in range(1, len(outs)):
+        nextlbl = outs[i]
+        outlbl  = f"mix{i}"
+        acc_filters.append(f"{cur}{nextlbl} acrossfade=d={xfade_ms/1000.0}:c1=tri:c2=tri [{outlbl}]")
+        cur = f"[{outlbl}]"
+
+    filter_complex = "; ".join(filters + acc_filters)
+    out_id = f"{uuid.uuid4()}.wav"
+    out_path = os.path.join(MIXES, out_id)
+    args = inputs + ["-filter_complex", filter_complex or "", "-map", cur if outs else "0:a", "-ac", "2", out_path]
+    r = ffmpeg(*args)
+    if r.returncode != 0:
+        return jsonify({"error":"ffmpeg_failed","stderr": r.stderr.decode()}), 500
+
+    return jsonify({ "mix_id": out_id, "url": f"/api/mix/{out_id}" })
 
 # ---- upload
 @app.post("/api/upload")
