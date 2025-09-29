@@ -10,6 +10,433 @@ import { CSS } from "@dnd-kit/utilities";
 import ErrorBoundary from "./ErrorBoundary";
 import logoImage from "./assets/MiniMixLabLogo.png";
 
+// Time parser utility
+function parseTime(t) {
+  // accepts "mm:ss", "m:ss.ms", or plain seconds ("12.5")
+  if (typeof t !== "string") return Number(t) || 0;
+  const parts = t.trim().split(":");
+  if (parts.length === 1) return Number(parts[0]) || 0;
+  const [mm, ss] = parts;
+  return (Number(mm) || 0) * 60 + (Number(ss) || 0);
+}
+
+// WebAudio helpers for cutting/editing audio
+async function fetchAudioBuffer(url) {
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const res = await fetch(url);
+  const arr = await res.arrayBuffer();
+  const buf = await ctx.decodeAudioData(arr);
+  ctx.close();
+  return buf;
+}
+
+function encodeWavFromBuffer(buf) {
+  const numCh = buf.numberOfChannels;
+  const len = buf.length;
+  const sr = buf.sampleRate;
+
+  // interleave (mono or stereo)
+  let interleaved;
+  if (numCh === 1) {
+    interleaved = buf.getChannelData(0);
+  } else {
+    const L = buf.getChannelData(0), R = buf.getChannelData(1);
+    interleaved = new Float32Array(len * 2);
+    for (let i=0, j=0; i<len; i++, j+=2) { interleaved[j] = L[i]; interleaved[j+1] = R[i]; }
+  }
+
+  // PCM16
+  const bytesPerSample = 2;
+  const blockAlign = (numCh) * bytesPerSample;
+  const dataSize = interleaved.length * bytesPerSample;
+  const buffer = new ArrayBuffer(44 + dataSize);
+  const view = new DataView(buffer);
+
+  const writeStr = (o, s) => { for (let i=0; i<s.length; i++) view.setUint8(o+i, s.charCodeAt(i)); };
+
+  // RIFF header
+  writeStr(0, 'RIFF');
+  view.setUint32(4, 36 + dataSize, true);
+  writeStr(8, 'WAVE');
+
+  // fmt
+  writeStr(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); // PCM
+  view.setUint16(22, numCh, true);
+  view.setUint32(24, sr, true);
+  view.setUint32(28, sr * blockAlign, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, 16, true);
+
+  // data
+  writeStr(36, 'data');
+  view.setUint32(40, dataSize, true);
+
+  // samples
+  let offset = 44;
+  for (let i=0; i<interleaved.length; i++) {
+    const s = Math.max(-1, Math.min(1, interleaved[i]));
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+    offset += 2;
+  }
+
+  return new Blob([view], { type: 'audio/wav' });
+}
+
+function sliceBuffer(buf, t0, t1, mode="cut") {
+  // mode: "cut" removes region; "silence" replaces region with same-length silence
+  const sr = buf.sampleRate;
+  const a = Math.max(0, Math.floor(t0 * sr));
+  const b = Math.max(a, Math.floor(t1 * sr));
+  const n = buf.length;
+  const ch = buf.numberOfChannels;
+
+  if (mode === "silence") {
+    const out = new AudioBuffer({ length: n, sampleRate: sr, numberOfChannels: ch });
+    for (let c=0; c<ch; c++) {
+      const src = buf.getChannelData(c);
+      const dst = out.getChannelData(c);
+      dst.set(src);
+      dst.fill(0, a, Math.min(b, n));
+    }
+    return out;
+  }
+
+  // "cut" → concatenate [0,a) + [b,n)
+  const newLen = Math.max(0, a) + Math.max(0, n - b);
+  const out = new AudioBuffer({ length: newLen, sampleRate: sr, numberOfChannels: ch });
+
+  for (let c=0; c<ch; c++) {
+    const src = buf.getChannelData(c);
+    const dst = out.getChannelData(c);
+    if (a > 0) dst.set(src.subarray(0, a), 0);
+    if (b < n) dst.set(src.subarray(b), a);
+  }
+  return out;
+}
+
+// Additional helpers for Replace With Clip functionality
+async function fileToAudioBuffer(file) {
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const arr = await file.arrayBuffer();
+  const buf = await ctx.decodeAudioData(arr);
+  ctx.close();
+  return buf;
+}
+
+function resampleToDuration(buf, targetSeconds) {
+  const sr = buf.sampleRate;
+  const ch = buf.numberOfChannels;
+  const targetLen = Math.max(1, Math.round(targetSeconds * sr));
+  const out = new AudioBuffer({ length: targetLen, sampleRate: sr, numberOfChannels: ch });
+
+  // simple time-stretch via linear resample (good enough for replace UX)
+  const scale = buf.length / targetLen;
+  for (let c = 0; c < ch; c++) {
+    const src = buf.getChannelData(c);
+    const dst = out.getChannelData(c);
+    for (let i = 0; i < targetLen; i++) {
+      const x = i * scale;
+      const i0 = Math.floor(x), i1 = Math.min(src.length - 1, i0 + 1);
+      const t = x - i0;
+      dst[i] = src[i0] * (1 - t) + src[i1] * t;
+    }
+  }
+  return out;
+}
+
+function concatWithCrossfade(before, middle, after, crossfadeMs = 20) {
+  // crossfades: end of 'before' -> start of 'middle', and end of 'middle' -> start of 'after'
+  const sr = middle.sampleRate;
+  const ch = middle.numberOfChannels;
+  const xf = Math.max(0, Math.round((crossfadeMs / 1000) * sr));
+
+  const len =
+    (before ? before.length : 0) +
+    (middle.length - (before ? xf : 0) - (after ? xf : 0)) +
+    (after ? after.length : 0);
+
+  const out = new AudioBuffer({ length: Math.max(0, len), sampleRate: sr, numberOfChannels: ch });
+
+  const write = (src, dst, offset) => {
+    dst.set(src, offset);
+    return offset + src.length;
+  };
+
+  for (let c = 0; c < ch; c++) {
+    const dst = out.getChannelData(c);
+    let off = 0;
+
+    // BEFORE
+    if (before) {
+      const b = before.getChannelData(Math.min(c, before.numberOfChannels - 1));
+      if (xf > 0) {
+        // copy all but last xf samples
+        const keep = Math.max(0, b.length - xf);
+        dst.set(b.subarray(0, keep), off);
+        off += keep;
+      } else {
+        off = write(b, dst, off);
+      }
+    }
+
+    // MIDDLE (with in/out fades if needed)
+    const m = middle.getChannelData(c);
+    const tmp = new Float32Array(m.length);
+    tmp.set(m);
+
+    if (before && xf > 0) {
+      for (let i = 0; i < xf; i++) {
+        const g = i / xf;                // fade in
+        tmp[i] *= g;
+      }
+    }
+    if (after && xf > 0) {
+      for (let i = 0; i < xf; i++) {
+        const g = 1 - i / xf;            // fade out
+        tmp[tmp.length - 1 - i] *= g;
+      }
+    }
+    off = write(tmp, dst, off);
+
+    // AFTER
+    if (after) {
+      const a = after.getChannelData(Math.min(c, after.numberOfChannels - 1));
+      if (xf > 0) {
+        // skip first xf samples already crossfaded
+        dst.set(a.subarray(xf), off);
+      } else {
+        dst.set(a, off);
+      }
+    }
+  }
+  return out;
+}
+
+// Audio Editor Component
+function AudioEditor({ song }) {
+  const [tStart, setTStart] = useState("0:00");
+  const [tEnd, setTEnd] = useState("0:10");
+  const [busy, setBusy] = useState(false);
+  const [showEditor, setShowEditor] = useState(false);
+  const [replaceFile, setReplaceFile] = useState(null);
+  const [busyReplace, setBusyReplace] = useState(false);
+
+  const previewSlice = () => {
+    const s = parseTime(tStart);
+    const e = parseTime(tEnd);
+
+    // Create audio element for preview
+    const audio = new Audio(`/api/preview?file_id=${song.file_id}&start=${s}&end=${e}`);
+    audio.play().catch(console.error);
+  };
+
+  const cutOut = async () => {
+    try {
+      setBusy(true);
+      const url = `/api/preview?file_id=${song.file_id}`;
+      const buf = await fetchAudioBuffer(url);
+      const s = parseTime(tStart);
+      const e = parseTime(tEnd);
+      const cut = sliceBuffer(buf, s, e, "cut");
+      const wav = encodeWavFromBuffer(cut);
+      const outUrl = URL.createObjectURL(wav);
+
+      // Download
+      const a = document.createElement("a");
+      a.href = outUrl;
+      a.download = `${song.name.replace(/\.[^.]+$/, '')}_cut.wav`;
+      a.click();
+
+      // Auto-play
+      const audio = new Audio(outUrl);
+      audio.play().catch(() => {});
+    } catch (err) {
+      console.error('Cut failed:', err);
+      alert('Cut failed: ' + err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const replaceWithSilence = async () => {
+    try {
+      setBusy(true);
+      const url = `/api/preview?file_id=${song.file_id}`;
+      const buf = await fetchAudioBuffer(url);
+      const s = parseTime(tStart);
+      const e = parseTime(tEnd);
+      const silenced = sliceBuffer(buf, s, e, "silence");
+      const wav = encodeWavFromBuffer(silenced);
+      const outUrl = URL.createObjectURL(wav);
+
+      // Download
+      const a = document.createElement("a");
+      a.href = outUrl;
+      a.download = `${song.name.replace(/\.[^.]+$/, '')}_silence.wav`;
+      a.click();
+
+      // Auto-play
+      const audio = new Audio(outUrl);
+      audio.play().catch(() => {});
+    } catch (err) {
+      console.error('Silence replace failed:', err);
+      alert('Silence replace failed: ' + err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const replaceWithClip = async () => {
+    try {
+      setBusyReplace(true);
+      const regionStart = parseTime(tStart);
+      const regionEnd = parseTime(tEnd);
+      const regionDur = Math.max(0.01, regionEnd - regionStart);
+
+      // 1) fetch original buffer (current track)
+      const origUrl = `/api/preview?file_id=${song.file_id}`;
+      const orig = await fetchAudioBuffer(origUrl);
+
+      // split original into before / after
+      const sr = orig.sampleRate;
+      const a = Math.max(0, Math.floor(regionStart * sr));
+      const b = Math.max(a, Math.floor(regionEnd * sr));
+      const ch = Math.max(1, orig.numberOfChannels);
+
+      const mk = (start, end) => {
+        const len = Math.max(0, end - start);
+        const o = new AudioBuffer({ length: len, sampleRate: sr, numberOfChannels: ch });
+        for (let c = 0; c < ch; c++) {
+          o.getChannelData(c).set(orig.getChannelData(c).subarray(start, end));
+        }
+        return o;
+      };
+
+      const before = a > 0 ? mk(0, a) : null;
+      const after = b < orig.length ? mk(b, orig.length) : null;
+
+      // 2) read replacement file & time-fit to region
+      const repBuf = await fileToAudioBuffer(replaceFile);
+      const repFit = resampleToDuration(repBuf, regionDur);
+
+      // 3) stitch with gentle crossfades (20ms)
+      const outBuf = concatWithCrossfade(before, repFit, after, 20);
+
+      // 4) export + load back for instant audition
+      const wav = encodeWavFromBuffer(outBuf);
+      const outUrl = URL.createObjectURL(wav);
+
+      // 5) download
+      const dl = document.createElement("a");
+      dl.href = outUrl;
+      dl.download = `${song.name.replace(/\.[^.]+$/, '')}_replaced.wav`;
+      dl.click();
+
+      // 6) auto-play from the edited region
+      const audio = new Audio(outUrl);
+      audio.currentTime = Math.max(0, regionStart - 0.05);
+      audio.play().catch(() => {});
+    } catch (e) {
+      console.error('Replace failed:', e);
+      alert('Replace failed: ' + e.message);
+    } finally {
+      setBusyReplace(false);
+    }
+  };
+
+  if (!showEditor) {
+    return (
+      <div className="mb-3">
+        <button
+          onClick={() => setShowEditor(true)}
+          className="text-xs text-cyan-400 hover:text-cyan-300 transition-colors"
+        >
+          ✂️ Audio Editor
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mb-4 p-3 bg-slate-900/50 rounded-lg border border-cyan-500/10">
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-sm font-medium text-cyan-300">✂️ Audio Editor</span>
+        <button
+          onClick={() => setShowEditor(false)}
+          className="text-xs text-gray-400 hover:text-gray-300"
+        >
+          ✕
+        </button>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2 mb-3">
+        <div>
+          <label className="block text-xs text-gray-400 mb-1">Start</label>
+          <input
+            value={tStart}
+            onChange={e => setTStart(e.target.value)}
+            placeholder="0:00 or 10.5"
+            className="w-full px-2 py-1 text-xs bg-slate-800 border border-slate-600 rounded text-white"
+          />
+        </div>
+        <div>
+          <label className="block text-xs text-gray-400 mb-1">End</label>
+          <input
+            value={tEnd}
+            onChange={e => setTEnd(e.target.value)}
+            placeholder="0:10 or 20.5"
+            className="w-full px-2 py-1 text-xs bg-slate-800 border border-slate-600 rounded text-white"
+          />
+        </div>
+      </div>
+
+      <div className="flex gap-2 flex-wrap">
+        <button
+          onClick={previewSlice}
+          className="px-3 py-1 text-xs bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-300 rounded transition-colors"
+        >
+          ▶ Preview
+        </button>
+        <button
+          onClick={cutOut}
+          disabled={busy}
+          className="px-3 py-1 text-xs bg-red-600/20 hover:bg-red-600/40 text-red-300 rounded transition-colors disabled:opacity-50"
+        >
+          {busy ? '...' : '✂️ Cut Out'}
+        </button>
+        <button
+          onClick={replaceWithSilence}
+          disabled={busy}
+          className="px-3 py-1 text-xs bg-orange-600/20 hover:bg-orange-600/40 text-orange-300 rounded transition-colors disabled:opacity-50"
+        >
+          {busy ? '...' : '🔇 Silence'}
+        </button>
+      </div>
+
+      <div className="mt-3 pt-3 border-t border-cyan-500/10">
+        <div className="mb-2">
+          <label className="block text-xs text-gray-400 mb-1">Replace with audio file</label>
+          <input
+            type="file"
+            accept="audio/*"
+            onChange={e => setReplaceFile(e.target.files?.[0] || null)}
+            className="w-full text-xs text-gray-300 file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-xs file:bg-slate-700 file:text-cyan-300 hover:file:bg-slate-600"
+          />
+        </div>
+        <button
+          onClick={replaceWithClip}
+          disabled={!replaceFile || busyReplace}
+          className="px-3 py-1 text-xs bg-purple-600/20 hover:bg-purple-600/40 text-purple-300 rounded transition-colors disabled:opacity-50"
+        >
+          {busyReplace ? '...' : '🎵 Replace With Clip'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function SegmentCard({ seg, onPreview }) {
   const dur = (seg.end - seg.start).toFixed(1);
   return (
@@ -426,6 +853,10 @@ function AppInner(){
                       {activeSong === song.file_id ? "✓ Active" : "Set Active"}
                     </button>
                   </div>
+
+                  {/* Audio Editor */}
+                  <AudioEditor song={song} />
+
 
                   <div className="grid grid-cols-2 gap-3">
                     {song.segments?.map((seg, idx) => (
