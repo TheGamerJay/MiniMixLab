@@ -11,7 +11,7 @@ class ErrorBoundary extends React.Component {
   componentDidCatch(error, info){ console.error("Render error:", error, info); this.setState({ info }); }
   render(){
     if(this.state.error){
-      return (
+      return (<ErrorBoundary>
         <div style={{background:"#3b0f0f",color:"#fff",padding:"12px",borderRadius:8,margin:"12px 0",fontFamily:"system-ui"}}>
           <div style={{fontWeight:700,marginBottom:6}}>UI Render Error</div>
           <div style={{whiteSpace:"pre-wrap",fontFamily:"ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"}}>
@@ -51,7 +51,7 @@ function TrackCard({ track, idx, onMute, onSolo, onPlay, audioRef }) {
   setProjectBpm(120);
 }
 
-return (
+return (<ErrorBoundary>
     <div className="card">
       <audio ref={audioRef} preload="metadata" />
       <div className="row">
@@ -250,8 +250,8 @@ function injectDemo(){
   setProjectBpm(120);
 }
 
-return (
-    <ErrorBoundary><div className="wrap" style={{position:"relative"}}><div style={{position:"fixed",left:12,bottom:12,background:"#223",color:"#fff",padding:"6px 10px",borderRadius:8,zIndex:99998,fontFamily:"system-ui"}}>React content rendered</div>
+return (<ErrorBoundary>
+    <div className="wrap" style={{position:"relative"}}><div style={{position:"fixed",left:12,bottom:12,background:"#223",color:"#fff",padding:"6px 10px",borderRadius:8,zIndex:99998,fontFamily:"system-ui"}}>React content rendered</div>
       {/* Debug banner INSIDE the root (keeps one JSX parent) */}
       <div style={{background:"#0b0f1a",color:"#fff",padding:"8px 12px",fontFamily:"system-ui",position:"sticky",top:0,zIndex:9999}}>
         UI LOADED   if you see this, React mounted.
@@ -357,6 +357,8 @@ return (
     </div>
   );
 }
+
+
 
 
 
