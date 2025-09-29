@@ -2,6 +2,8 @@ import os, uuid, time, tempfile, subprocess, json
 from flask import Flask, request, send_file, jsonify, Response
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
+import psycopg2
+from datetime import datetime
 
 # --- config
 BASE = os.path.dirname(__file__)
@@ -12,12 +14,95 @@ os.makedirs(MIXES, exist_ok=True)
 
 app = Flask(__name__)
 CORS(app, supports_credentials=True)
-app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY","dev_key")
+
+# Use Railway environment variables
+app.config["SECRET_KEY"] = os.environ.get("LOCAL_SECRET_KEY") or os.environ.get("SECRET_KEY", "dev_key")
+app.config["DATABASE_URL"] = os.environ.get("DATABASE_URL")
+app.config["DATABASE_PUBLIC_URL"] = os.environ.get("DATABASE_PUBLIC_URL")
+
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="eventlet")
 
 def ffmpeg(*args):
     cmd = ["ffmpeg","-hide_banner","-loglevel","error"] + list(args)
     return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+# --- database helpers ---
+def get_db_connection():
+    """Get database connection if available"""
+    try:
+        if app.config.get("DATABASE_URL"):
+            return psycopg2.connect(app.config["DATABASE_URL"])
+    except Exception as e:
+        print(f"Database connection failed: {e}")
+    return None
+
+def init_db():
+    """Initialize database tables if connection available"""
+    conn = get_db_connection()
+    if not conn:
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS uploads (
+                    id SERIAL PRIMARY KEY,
+                    file_id VARCHAR(255) UNIQUE NOT NULL,
+                    filename VARCHAR(255) NOT NULL,
+                    duration FLOAT,
+                    uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS mixes (
+                    id SERIAL PRIMARY KEY,
+                    mix_id VARCHAR(255) UNIQUE NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"Database init failed: {e}")
+        return False
+    finally:
+        conn.close()
+
+def log_upload(file_id, filename, duration):
+    """Log file upload to database if available"""
+    conn = get_db_connection()
+    if not conn:
+        return
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO uploads (file_id, filename, duration) VALUES (%s, %s, %s) ON CONFLICT (file_id) DO NOTHING",
+                (file_id, filename, duration)
+            )
+        conn.commit()
+    except Exception as e:
+        print(f"Failed to log upload: {e}")
+    finally:
+        conn.close()
+
+def log_mix(mix_id):
+    """Log mix creation to database if available"""
+    conn = get_db_connection()
+    if not conn:
+        return
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO mixes (mix_id) VALUES (%s) ON CONFLICT (mix_id) DO NOTHING",
+                (mix_id,)
+            )
+        conn.commit()
+    except Exception as e:
+        print(f"Failed to log mix: {e}")
+    finally:
+        conn.close()
+
+# Initialize database on startup
+init_db()
 
 # --- upload stem
 @app.post("/api/upload")
@@ -32,7 +117,12 @@ def upload():
     pr = subprocess.run(["ffprobe","-v","error","-show_entries","format=duration","-of","json",path],
                         stdout=subprocess.PIPE)
     meta = json.loads(pr.stdout or b"{}")
-    return jsonify({"file_id": fid, "duration": float(meta.get("format",{}).get("duration",0))})
+    duration = float(meta.get("format",{}).get("duration",0))
+
+    # Log to database if available
+    log_upload(fid, f.filename, duration)
+
+    return jsonify({"file_id": fid, "duration": duration})
 
 # --- stream preview slice (memory-safe)
 # GET /api/preview?file_id=..&start=..&end=..&speed=1.0
@@ -126,6 +216,9 @@ def mix():
     r = ffmpeg(*args)
     if r.returncode != 0:
         return jsonify({"error":"ffmpeg_failed", "stderr": r.stderr.decode()}), 500
+
+    # Log to database if available
+    log_mix(out_id)
 
     return jsonify({"mix_id": out_id, "url": f"/api/mix/{out_id}"})
 

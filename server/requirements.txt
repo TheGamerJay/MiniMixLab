@@ -5,3 +5,4 @@ eventlet==0.36.1
 python-dotenv==1.0.1
 ffmpeg-python==0.2.0
 pydub==0.25.1
+psycopg2-binary==2.9.9
