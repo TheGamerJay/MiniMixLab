@@ -18,6 +18,31 @@ export default function App() {
     setTracks([t1, t2]);
   }
 
+    // tiny beep preview (no backend, no files)
+  function beep(freq = 440, ms = 180) {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = "sine";
+      o.frequency.value = freq;
+      o.connect(g);
+      g.connect(ctx.destination);
+      const now = ctx.currentTime;
+      g.gain.setValueAtTime(0.0001, now);
+      g.gain.exponentialRampToValueAtTime(0.2, now + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + ms / 1000);
+      o.start(now);
+      o.stop(now + ms / 1000 + 0.05);
+    } catch {}
+  }
+
+  function onChipClick(trackIdx, secIdx) {
+    // change pitch per track/section so it feels different
+    const base = 440 + trackIdx * 120 + secIdx * 15;
+    beep(base, 220);
+    console.log("Clicked section", { trackIdx, secIdx });
+  }
   return (
     <div
       style={{
@@ -98,8 +123,8 @@ export default function App() {
                       fontSize: "0.9rem",
                     }}
                     title={`${s.start.toFixed(1)}${s.end.toFixed(1)}s`}
-                  >
-                    {s.label} ({s.start.toFixed(1)}{s.end.toFixed(1)})
+                   onClick={() => onChipClick(i, k)} style={{cursor:"pointer", border: "1px solid #555", padding:"6px 10px", borderRadius:"999px", background:"#151a22", fontSize:"0.9rem"}}>
+                    {s.label} ({s.start.toFixed(1)}  {s.end.toFixed(1)})
                   </span>
                 ))}
               </div>
@@ -110,3 +135,4 @@ export default function App() {
     </div>
   );
 }
+
