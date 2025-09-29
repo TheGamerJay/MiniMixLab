@@ -185,3 +185,5 @@ h1{
 .legend{
   margin-top:10px; color:var(--muted); font-size:.9rem
 }
+
+/* debug visibility */ .wrap{ color:#fff !important; } h1{ color:#fff !important; }
