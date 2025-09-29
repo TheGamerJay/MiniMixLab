@@ -187,3 +187,10 @@ h1{
 }
 
 /* debug visibility */ .wrap{ color:#fff !important; } h1{ color:#fff !important; }
+#root, .wrap { display:block !important; opacity:1 !important; visibility:visible !important; position:relative; }
+body, html { background:#0b0f1a !important; color:#fff !important; }
+.__debug * { outline:1px solid rgba(255,255,255,.1); }
+.grid, .panel, .card { background:rgba(255,255,255,.03) !important; }
+#root .overlay, #root .backdrop, #root [data-overlay], #root [role=dialog] {
+  display:none !important; opacity:0 !important; pointer-events:none !important;
+}
