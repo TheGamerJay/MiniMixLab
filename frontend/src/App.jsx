@@ -241,8 +241,7 @@ return (
           </label>
           <button onClick={injectDemo}>Load Demo Tracks</button>
 
-          <button onClick={()=>{
-            const t = tracks[0];
+          <button className="btn" onClick={()=>{ const t = tracks[0];
             if(!t) return;
             const a = audioRefs.current[t.hash];
             if(!a) return;
@@ -272,9 +271,9 @@ return (
             Auto-import rendered mix as new track
           </label>
 
-          <button onClick={renderFull} disabled={items.length===0}>Render Full Mix</button>
-          <button onClick={()=> setItems(prev => prev.slice(0,-1))} disabled={!items.length}>Undo</button>
-          <button onClick={()=> setItems([])} disabled={!items.length}>Clear</button>
+          <button className="btn" onClick={renderFull} disabled={items.length===0}>Render Full Mix</button>
+          <button className="btn" onClick={()=> setItems(prev => prev.slice(0,-1))} disabled={!items.length}>Undo</button>
+          <button className="btn" onClick={()=> setItems([])} disabled={!items.length}>Clear</button>
         </div>
 
         {renderUrl && (
@@ -333,5 +332,6 @@ return (
     </div>
   );
 }
+
 
 
