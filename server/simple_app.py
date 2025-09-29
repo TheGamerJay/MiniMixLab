@@ -1,7 +1,7 @@
 import os, uuid, time, tempfile, subprocess, json
 import numpy as np
 import librosa
-from flask import Flask, request, send_file, jsonify, Response
+from flask import Flask, request, send_file, jsonify, Response, send_from_directory
 from flask_cors import CORS
 
 BASE = os.path.dirname(__file__)
@@ -206,6 +206,23 @@ def auto_pitch():
 @app.route("/healthz")
 def health_check():
     return jsonify({"status": "healthy", "service": "MiniMixLab"})
+
+# Serve static files (frontend)
+@app.route("/")
+def serve_frontend():
+    static_dir = os.path.join(BASE, "static")
+    if os.path.exists(static_dir):
+        return send_from_directory(static_dir, "index.html")
+    else:
+        return jsonify({"message": "MiniMixLab API Server", "status": "running"})
+
+@app.route("/<path:path>")
+def serve_static_files(path):
+    static_dir = os.path.join(BASE, "static")
+    if os.path.exists(static_dir):
+        return send_from_directory(static_dir, path)
+    else:
+        return jsonify({"error": "File not found"}), 404
 
 if __name__ == "__main__":
     print("Starting MiniMixLab server...")
