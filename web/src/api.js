@@ -8,8 +8,16 @@ export async function uploadFile(file){
   return r.json();
 }
 
-export function previewUrl(file_id, start, end, speed=1.0){
-  const q = new URLSearchParams({ file_id, start, end, speed });
+export function previewUrl(file_id, start, end, speed = 1.0, opts = {}) {
+  const q = new URLSearchParams({
+    file_id,
+    start,
+    end,
+    speed,
+    pitch: opts.pitch ?? 0,
+    hq: opts.hq ? "1" : "0",
+    preset: opts.preset ?? "default",
+  });
   return `${API}/api/preview?${q}`;
 }
 

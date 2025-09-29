@@ -20,6 +20,13 @@ def ffmpeg(*args):
     cmd = ["ffmpeg","-hide_banner","-loglevel","error"] + list(args)
     return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
+def has_rubberband():
+    try:
+        out = subprocess.run(["ffmpeg", "-filters"], stdout=subprocess.PIPE, text=True).stdout
+        return "rubberband" in out
+    except Exception:
+        return False
+
 # --- NEW: simple in-memory stores (you can persist later)
 PROJECT = {"bpm": 120.0, "key": "C"}   # default project tempo/key
 ANALYSIS = {}  # file_id -> {"bpm": float, "key": "Am", "first_beat": seconds}
@@ -286,7 +293,9 @@ def render_arrangement():
     """
     body: {
       "pieces": [ { "file_id": "...", "start": float, "end": float,
-                    "speed": 1.0, "gain": -3.0, "pitch": 0 } ],  # pitch in semitones (can be 0)
+                    "speed": 1.0, "gain": -3.0, "pitch": 0,  // semitones (int)
+                    "preset": "vocals|drums|pads|default"    // optional per-piece
+                  } ],
       "xfade_ms": 200,
       "bar_aware": true,
       "project_bpm": 120,
@@ -294,12 +303,13 @@ def render_arrangement():
       "snap_to_bars": true,
       "align_key": true,
       "project_key": "Am",
-      "hq_pitch": true
+      "hq_pitch": true  // prefer Rubber Band if available
     }
     """
     payload = request.get_json(force=True)
     pieces = payload.get("pieces", [])
-    if not pieces: return jsonify({"error":"no pieces"}), 400
+    if not pieces:
+        return jsonify({"error": "no pieces"}), 400
 
     xfade_ms_req = int(payload.get("xfade_ms", 200))
     bar_aware     = bool(payload.get("bar_aware", False))
@@ -308,30 +318,35 @@ def render_arrangement():
     beats_per_bar = int(payload.get("beats_per_bar", 4))
     align_key     = bool(payload.get("align_key", False))
     project_key   = str(payload.get("project_key", "C"))
-    hq_pitch      = bool(payload.get("hq_pitch", True))
+    prefer_hq     = bool(payload.get("hq_pitch", True))
 
+    # Rubber Band availability
+    use_rubber = prefer_hq and has_rubberband()
+
+    # helpers
     def seconds_per_beat(bpm): return 60.0 / max(bpm, 1e-6)
     spb = seconds_per_beat(project_bpm)
     bar_seconds = spb * beats_per_bar
     safe_min_piece = 0.75
 
-    # normalize/snap + compute per-piece pitch if align_key requested
+    # normalize/snap + compute pitch if align_key requested
     norm = []
     for p in pieces:
         src = os.path.join(STORE, p["file_id"])
-        if not os.path.exists(src): return jsonify({"error": f"missing {p['file_id']}"}), 400
+        if not os.path.exists(src):
+            return jsonify({"error": f"missing {p['file_id']}"}), 400
 
-        start = float(p.get("start",0.0))
-        end   = float(p.get("end", start+10.0))
-        speed = float(p.get("speed",1.0))
-        gain  = float(p.get("gain",0.0))
-        raw_len = max(safe_min_piece, end-start)
+        start = float(p.get("start", 0.0))
+        end   = float(p.get("end", start + 10.0))
+        speed = float(p.get("speed", 1.0))
+        gain  = float(p.get("gain", 0.0))
+        raw_len = max(safe_min_piece, end - start)
 
         if bar_aware and snap_to_bars:
             bars = max(1, int(round(raw_len / bar_seconds)) or 1)
-            end  = start + bars*bar_seconds
+            end  = start + bars * bar_seconds
 
-        # pitch: explicit from piece or computed from analysis
+        # pitch semitones
         if "pitch" in p and p["pitch"] is not None:
             semi = int(p["pitch"])
         elif align_key:
@@ -340,33 +355,55 @@ def render_arrangement():
         else:
             semi = 0
 
-        norm.append({"file_id": p["file_id"], "start": start, "end": end,
-                     "speed": speed, "gain": gain, "pitch": semi})
+        # optional per-piece preset hint
+        preset = (p.get("preset") or "default").lower()
 
-    # build graph
+        norm.append({
+            "file_id": p["file_id"], "start": start, "end": end,
+            "speed": speed, "gain": gain, "pitch": semi, "preset": preset
+        })
+
+    # Build filtergraph
     inputs, filters, outs = [], [], []
     for i, p in enumerate(norm):
         inputs += ["-i", os.path.join(STORE, p["file_id"])]
         lbl = f"s{i}"
 
-        # pitch shift via asetrate + aresample (ratio r = 2^(semitones/12))
-        r = 2.0 ** (p["pitch"] / 12.0)
-        # combine tempo: we ALSO want overall tempo factor = p["speed"] (from BPM align)
-        # asetrate changes both pitch & tempo by r; then atempo(1/r) restores tempo.
-        # to achieve final tempo factor = speed, we set total atempo = (speed / r).
-        combined_atempo = p["speed"] / max(r, 1e-6)
+        if use_rubber:
+            # Rubber Band settings by preset
+            # Defaults: high quality, formant on, crisp transients
+            rb_opts = {
+                "default": "formant=on:transients=mixed:phase=laminar",
+                "vocals":  "formant=on:transients=mixed:phase=laminar",
+                "drums":   "formant=off:transients=crisp:phase=independent",
+                "pads":    "formant=on:transients=smooth:phase=laminar",
+            }.get(p["preset"], "formant=on:transients=mixed:phase=laminar")
 
-        filters.append(
-            f"[{i}:a]"
-            f" atrim={p['start']}:{p['end']}, asetpts=PTS-STARTPTS,"
-            f" asetrate=48000*{r:.8f}, aresample=48000,"
-            f" {atempo_chain(combined_atempo)},"
-            f" volume={10**(p['gain']/20):.6f}"
-            f" [{lbl}]"
-        )
+            tempo = max(0.05, float(p["speed"]))
+            semi  = int(p["pitch"])
+
+            filters.append(
+                f"[{i}:a]"
+                f" atrim={p['start']}:{p['end']}, asetpts=PTS-STARTPTS,"
+                f" rubberband=tempo={tempo}:pitch=semitones={semi}:{rb_opts}:threads=2,"
+                f" volume={10**(p['gain']/20):.6f}"
+                f" [{lbl}]"
+            )
+        else:
+            # Fallback: asetrate + aresample + atempo chain (tempo kept)
+            r = 2.0 ** (p["pitch"] / 12.0)                     # pitch ratio
+            combined_atempo = p["speed"] / max(r, 1e-6)        # to preserve target tempo
+            filters.append(
+                f"[{i}:a]"
+                f" atrim={p['start']}:{p['end']}, asetpts=PTS-STARTPTS,"
+                f" asetrate=48000*{r:.8f}, aresample=48000,"
+                f" {atempo_chain(combined_atempo)},"
+                f" volume={10**(p['gain']/20):.6f}"
+                f" [{lbl}]"
+            )
         outs.append(f"[{lbl}]")
 
-    # acrossfades with bar-aware caps
+    # Acrossfades with bar-aware caps
     acc, cur = [], outs[0] if outs else None
     for i in range(1, len(outs)):
         prev_len = norm[i-1]["end"] - norm[i-1]["start"]
@@ -384,12 +421,24 @@ def render_arrangement():
         cur = f"[{outlbl}]"
 
     fc = "; ".join(filters + acc)
-    out_id, out_path = f"{uuid.uuid4()}.wav", os.path.join(MIXES, f"{uuid.uuid4()}.wav")
-    args = inputs + ["-filter_complex", fc or "", "-map", cur if outs else "0:a", "-ac", "2", out_path]
+    out_id   = f"{uuid.uuid4()}.wav"
+    out_path = os.path.join(MIXES, out_id)
+
+    args = inputs + [
+        "-filter_complex", fc or "",
+        "-map", cur if outs else "0:a",
+        "-ac", "2",
+        out_path
+    ]
     r = ffmpeg(*args)
     if r.returncode != 0:
         return jsonify({"error":"ffmpeg_failed","stderr": r.stderr.decode()}), 500
-    return jsonify({"mix_id": os.path.basename(out_path), "url": f"/api/mix/file/{os.path.basename(out_path)}"})
+
+    return jsonify({
+        "mix_id": out_id,
+        "url": f"/api/mix/file/{out_id}",
+        "hq_pitch": use_rubber
+    })
 
 # ---- upload
 @app.post("/api/upload")
@@ -418,37 +467,63 @@ def upload():
     ANALYSIS[fid] = {"bpm": bpm, "key": key, "first_beat": first_beat, "duration": duration}
     return jsonify({"file_id": fid, "duration": duration, "analysis": ANALYSIS[fid]})
 
-# ---- memory-safe preview slice
 @app.get("/api/preview")
 def preview():
     fid = request.args.get("file_id")
     start = float(request.args.get("start", 0))
-    end = float(request.args.get("end", start+15))
-    speed = float(request.args.get("speed", 1.0))
-    src = os.path.join(STORE, fid)
-    if not os.path.exists(src): return jsonify({"error":"not found"}), 404
+    end   = float(request.args.get("end", start + 15))
+    speed = float(request.args.get("speed", 1.0))     # tempo factor
+    pitch = int(request.args.get("pitch", 0))         # semitones
+    preset = (request.args.get("preset") or "default").lower()
+    hq = request.args.get("hq", "0") in ("1", "true", "yes")
+
+    src = os.path.join(STORE, fid) if fid else None
+    if not src or not os.path.exists(src):
+        return jsonify({"error": "not found"}), 404
+
+    use_rubber = hq and has_rubberband()
+
+    # Rubber Band preset options
+    rb_opts = {
+        "default": "formant=on:transients=mixed:phase=laminar",
+        "vocals":  "formant=on:transients=mixed:phase=laminar",
+        "drums":   "formant=off:transients=crisp:phase=independent",
+        "pads":    "formant=on:transients=smooth:phase=laminar",
+    }.get(preset, "formant=on:transients=mixed:phase=laminar")
 
     def generate():
-        # Chain atempo into 0.5..2.0 safe steps
-        sp = speed
-        atempo_chain = []
-        while sp < 0.5 or sp > 2.0:
-            step = 2.0 if sp > 2.0 else 0.5
-            atempo_chain.append(f"atempo={step}")
-            sp = sp/step if sp > 2.0 else sp/0.5
-        atempo_chain.append(f"atempo={sp}")
-        args = [
-            "-ss", str(start), "-to", str(end),
-            "-i", src,
-            "-filter:a", ",".join(atempo_chain),
-            "-map", "a:0", "-b:a", "128k", "-f", "mp3", "pipe:1"
-        ]
-        proc = subprocess.Popen(["ffmpeg","-hide_banner","-loglevel","error"]+args,
+        if use_rubber:
+            # One high-quality filter does both tempo + pitch
+            args = [
+                "-ss", str(start), "-to", str(end),
+                "-i", src,
+                "-filter:a", f"rubberband=tempo={max(0.05, speed)}:pitch=semitones={pitch}:{rb_opts}:threads=2",
+                "-map", "a:0",
+                "-b:a", "160k",
+                "-f", "mp3",
+                "pipe:1"
+            ]
+        else:
+            # Fallback: pitch via asetrate, then restore tempo via atempo
+            r = 2.0 ** (pitch / 12.0)
+            combined_atempo = speed / max(r, 1e-6)
+            args = [
+                "-ss", str(start), "-to", str(end),
+                "-i", src,
+                "-filter:a", f"asetrate=48000*{r:.8f},aresample=48000,{atempo_chain(combined_atempo)}",
+                "-map", "a:0",
+                "-b:a", "160k",
+                "-f", "mp3",
+                "pipe:1"
+            ]
+
+        proc = subprocess.Popen(["ffmpeg", "-hide_banner", "-loglevel", "error"] + args,
                                 stdout=subprocess.PIPE)
         try:
             while True:
-                chunk = proc.stdout.read(64*1024)
-                if not chunk: break
+                chunk = proc.stdout.read(64 * 1024)
+                if not chunk:
+                    break
                 yield chunk
         finally:
             proc.kill()

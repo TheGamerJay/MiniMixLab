@@ -21,21 +21,35 @@ function SegmentCard({ seg, onPreview }) {
   );
 }
 
-function SortablePiece({ piece, index, onRemove }){
+function SortablePiece({ piece, index, onRemove, onUpdatePiece }){
   const {attributes, listeners, setNodeRef, transform, transition} = useSortable({id: piece.id});
   const style = { transform: CSS.Transform.toString(transform), transition };
   const dur = (piece.end - piece.start).toFixed(1);
   return (
     <div ref={setNodeRef} style={style} {...attributes} {...listeners}
          className="p-2 rounded bg-cyan-500/10 flex items-center justify-between">
-      <div className="text-sm">
+      <div className="text-sm flex-1">
         <div>{piece.label || "Section"} — {dur}s</div>
         <div className="text-xs opacity-70 mt-1">
           {(piece.end - piece.start).toFixed(1)}s • speed {(piece.speed ?? 1).toFixed(2)}× • pitch {(piece.pitch ?? 0)} st
         </div>
         <span className="opacity-60 text-xs">{piece.name}</span>
+        <div className="mt-1 flex gap-2 items-center">
+          <label className="text-xs">Preset:</label>
+          <select
+            className="text-black text-xs px-1 py-0.5"
+            value={piece.preset || "default"}
+            onChange={e => onUpdatePiece(index, { preset: e.target.value })}
+            onClick={e => e.stopPropagation()}
+          >
+            <option value="default">Default</option>
+            <option value="vocals">Vocals</option>
+            <option value="drums">Drums</option>
+            <option value="pads">Pads</option>
+          </select>
+        </div>
       </div>
-      <button className="text-xs underline" onClick={()=>onRemove(index)}>remove</button>
+      <button className="text-xs underline ml-2" onClick={()=>onRemove(index)}>remove</button>
     </div>
   );
 }
@@ -81,7 +95,14 @@ function AppInner(){
   }
 
   function previewSeg(file_id, seg){
-    const url = previewUrl(file_id, seg.start, seg.end, 1.0);
+    // find current piece settings if previewing from timeline, else defaults
+    const piece = timeline.find(p => p.file_id === file_id);
+    const opts = {
+      hq: hqPitch,
+      pitch: piece?.pitch ?? 0,
+      preset: piece?.preset ?? "default"
+    };
+    const url = previewUrl(file_id, seg.start, seg.end, 1.0, opts);
     const el = audioRef.current; el.src = url; el.load(); el.play();
   }
 
@@ -92,7 +113,7 @@ function AppInner(){
       name: song.name,
       start: seg.start, end: seg.end,
       speed: 1.0, gain: -3.0, label: seg.label,
-      pitch: 0
+      pitch: 0, preset: "default"
     }]);
   }
 
@@ -138,6 +159,10 @@ function AppInner(){
     setTimeline(t => t.filter((_,i)=>i!==idx));
   }
 
+  function updatePiece(idx, updates){
+    setTimeline(t => t.map((piece, i) => i === idx ? { ...piece, ...updates } : piece));
+  }
+
   async function onRenderArrangement(){
     if (!timeline.length) return;
     const pieces = timeline.map(p => ({
@@ -146,7 +171,8 @@ function AppInner(){
       end: p.end,
       speed: p.speed ?? 1.0,
       gain: p.gain ?? -3.0,
-      pitch: p.pitch ?? 0
+      pitch: p.pitch ?? 0,
+      preset: p.preset ?? "default"
     }));
 
     const { url } = await renderArrangement(pieces, {
@@ -290,7 +316,7 @@ function AppInner(){
             <SortableContext items={timeline.map(x=>x.id)} strategy={verticalListSortingStrategy}>
               <div className="space-y-2">
                 {timeline.map((p, idx) => (
-                  <SortablePiece key={p.id} piece={p} index={idx} onRemove={removeFromTimeline}/>
+                  <SortablePiece key={p.id} piece={p} index={idx} onRemove={removeFromTimeline} onUpdatePiece={updatePiece}/>
                 ))}
               </div>
             </SortableContext>
