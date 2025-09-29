@@ -232,7 +232,7 @@ return (
         UI LOADED   if you see this, React mounted.
       </div>
 
-      <h1>MiniMixLab </h1>
+      <h1>MiniMixLab</h1><p style={{margin:"8px 0 16px",opacity:.9}}>Hello from React  UI is alive.</p>
 
       <div className="panel">
         <div className="controls">
@@ -332,6 +332,7 @@ return (
     </div>
   );
 }
+
 
 
 
