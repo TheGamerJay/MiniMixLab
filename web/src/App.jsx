@@ -41,7 +41,7 @@ export default function App() {
         <img
           src={logoImage}
           alt="MiniMixLab Logo"
-          className="h-10 w-auto"
+          className="h-16 w-auto"
           onError={(e) => {
             // Fallback if logo doesn't exist
             e.target.style.display = 'none';
