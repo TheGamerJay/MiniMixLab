@@ -73,12 +73,22 @@ export async function fetchSegments(file_id){
   return r.json(); // { file_id, segments: [{start,end,label,confidence}] }
 }
 
-export async function renderArrangement(pieces, xfade_ms=200){
+export async function renderArrangement(pieces, opts = {}){
+  const body = { pieces, ...opts };
   const r = await fetch(`${API}/api/render_arrangement`, {
-    method:"POST",
-    headers:{ "Content-Type":"application/json" },
-    body: JSON.stringify({ pieces, xfade_ms })
+    method: "POST",
+    headers: { "Content-Type":"application/json" },
+    body: JSON.stringify(body),
   });
   if (!r.ok) throw new Error(await r.text());
-  return r.json(); // {mix_id, url}
+  return r.json();
+}
+
+export async function autoPitch(file_ids, project_key){
+  const r = await fetch(`${API}/api/auto_pitch`, {
+    method:"POST", headers:{ "Content-Type":"application/json" },
+    body: JSON.stringify({ file_ids, project_key })
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json(); // {target_key, tracks:[{file_id,semitones,...}]}
 }

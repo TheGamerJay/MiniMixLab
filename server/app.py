@@ -31,6 +31,39 @@ MINOR_KEYS = [k+"m" for k in MAJOR_KEYS]
 _K_MAJOR = np.array([6.35,2.23,3.48,2.33,4.38,4.09,2.52,5.19,2.39,3.66,2.29,2.88])
 _K_MINOR = np.array([6.33,2.68,3.52,5.38,2.60,3.53,2.54,4.75,3.98,2.69,3.34,3.17])
 
+# --- key → semitone helpers
+PITCH_CLASS = {"C":0,"C#":1,"Db":1,"D":2,"D#":3,"Eb":3,"E":4,"F":5,"F#":6,"Gb":6,"G":7,"G#":8,"Ab":8,"A":9,"A#":10,"Bb":10,"B":11}
+
+def _parse_key(k: str):
+    if not k or k=="Unknown": return (None, "maj")
+    k = k.strip()
+    mode = "min" if k.endswith("m") or "min" in k.lower() else "maj"
+    root = k[:-1] if k.endswith("m") else k
+    root = root.replace("maj","").replace("min","").strip()
+    root_pc = PITCH_CLASS.get(root, None)
+    return (root_pc, mode)
+
+def semitone_delta(from_key: str, to_key: str):
+    fr, fm = _parse_key(from_key)
+    tr, tm = _parse_key(to_key)
+    if fr is None or tr is None: return 0  # fallback: no shift
+    # naive approach: match tonic; ignore mode for now (extension: map relative maj/min if desired)
+    delta = (tr - fr) % 12
+    # choose the shortest direction (e.g., +7 vs -5 -> pick -5)
+    if delta > 6: delta -= 12
+    return int(delta)
+
+def atempo_chain(value: float):
+    # FFmpeg atempo supports 0.5..2.0; chain if outside
+    v = max(0.05, float(value))
+    chain = []
+    while v < 0.5 or v > 2.0:
+        step = 2.0 if v > 2.0 else 0.5
+        chain.append(f"atempo={step}")
+        v = v/step if step==2.0 else v/0.5
+    chain.append(f"atempo={v}")
+    return ",".join(chain)
+
 def _estimate_key(y, sr):
     # chroma via CQT then average over time
     chroma = librosa.feature.chroma_cqt(y=y, sr=sr)
@@ -226,6 +259,19 @@ def auto_align():
         })
     return jsonify({"target_bpm": target_bpm, "tracks": result})
 
+@app.post("/api/auto_pitch")
+def auto_pitch():
+    data = request.get_json(force=True)
+    file_ids = data.get("file_ids", [])
+    project_key = data.get("project_key", "C")
+    out = []
+    for fid in file_ids:
+        a = ANALYSIS.get(fid) or {}
+        from_key = a.get("key","Unknown")
+        st = semitone_delta(from_key, project_key)
+        out.append({"file_id": fid, "detected_key": from_key, "target_key": project_key, "semitones": st})
+    return jsonify({"target_key": project_key, "tracks": out})
+
 @app.get("/api/segment")
 def api_segment():
     fid = request.args.get("file_id")
@@ -235,57 +281,115 @@ def api_segment():
     segs = segment_song(src, k_segments=8)
     return jsonify({"file_id": fid, "segments": segs})
 
-# body: { "pieces": [ { "file_id": "...", "start": float, "end": float, "speed": 1.0, "gain": -3.0 } ],
-#         "xfade_ms": 200 }
 @app.post("/api/render_arrangement")
 def render_arrangement():
+    """
+    body: {
+      "pieces": [ { "file_id": "...", "start": float, "end": float,
+                    "speed": 1.0, "gain": -3.0, "pitch": 0 } ],  # pitch in semitones (can be 0)
+      "xfade_ms": 200,
+      "bar_aware": true,
+      "project_bpm": 120,
+      "beats_per_bar": 4,
+      "snap_to_bars": true,
+      "align_key": true,
+      "project_key": "Am",
+      "hq_pitch": true
+    }
+    """
     payload = request.get_json(force=True)
     pieces = payload.get("pieces", [])
-    xfade_ms = int(payload.get("xfade_ms", 200))
     if not pieces: return jsonify({"error":"no pieces"}), 400
 
-    # Build a filtergraph that trims each slice, speeds, gains, then concatenates with acrossfades
-    inputs = []
-    filters = []
-    outs = []
-    for i, p in enumerate(pieces):
+    xfade_ms_req = int(payload.get("xfade_ms", 200))
+    bar_aware     = bool(payload.get("bar_aware", False))
+    snap_to_bars  = bool(payload.get("snap_to_bars", True))
+    project_bpm   = float(payload.get("project_bpm", 120.0))
+    beats_per_bar = int(payload.get("beats_per_bar", 4))
+    align_key     = bool(payload.get("align_key", False))
+    project_key   = str(payload.get("project_key", "C"))
+    hq_pitch      = bool(payload.get("hq_pitch", True))
+
+    def seconds_per_beat(bpm): return 60.0 / max(bpm, 1e-6)
+    spb = seconds_per_beat(project_bpm)
+    bar_seconds = spb * beats_per_bar
+    safe_min_piece = 0.75
+
+    # normalize/snap + compute per-piece pitch if align_key requested
+    norm = []
+    for p in pieces:
         src = os.path.join(STORE, p["file_id"])
         if not os.path.exists(src): return jsonify({"error": f"missing {p['file_id']}"}), 400
-        inputs += ["-i", src]
-        lbl = f"s{i}"
-        start = float(p.get("start", 0.0))
+
+        start = float(p.get("start",0.0))
         end   = float(p.get("end", start+10.0))
-        speed = float(p.get("speed", 1.0))
-        gain  = float(p.get("gain", 0.0))
-        # chain atempo safely
-        sp = speed; chain=[]
-        while sp<0.5 or sp>2.0:
-            step = 2.0 if sp>2.0 else 0.5
-            chain.append(f"atempo={step}"); sp = sp/step if sp>2.0 else sp/0.5
-        chain.append(f"atempo={sp}")
+        speed = float(p.get("speed",1.0))
+        gain  = float(p.get("gain",0.0))
+        raw_len = max(safe_min_piece, end-start)
+
+        if bar_aware and snap_to_bars:
+            bars = max(1, int(round(raw_len / bar_seconds)) or 1)
+            end  = start + bars*bar_seconds
+
+        # pitch: explicit from piece or computed from analysis
+        if "pitch" in p and p["pitch"] is not None:
+            semi = int(p["pitch"])
+        elif align_key:
+            detected = ANALYSIS.get(p["file_id"], {}).get("key", "Unknown")
+            semi = semitone_delta(detected, project_key)
+        else:
+            semi = 0
+
+        norm.append({"file_id": p["file_id"], "start": start, "end": end,
+                     "speed": speed, "gain": gain, "pitch": semi})
+
+    # build graph
+    inputs, filters, outs = [], [], []
+    for i, p in enumerate(norm):
+        inputs += ["-i", os.path.join(STORE, p["file_id"])]
+        lbl = f"s{i}"
+
+        # pitch shift via asetrate + aresample (ratio r = 2^(semitones/12))
+        r = 2.0 ** (p["pitch"] / 12.0)
+        # combine tempo: we ALSO want overall tempo factor = p["speed"] (from BPM align)
+        # asetrate changes both pitch & tempo by r; then atempo(1/r) restores tempo.
+        # to achieve final tempo factor = speed, we set total atempo = (speed / r).
+        combined_atempo = p["speed"] / max(r, 1e-6)
+
         filters.append(
-            f"[{i}:a] atrim={start}:{end}, asetpts=PTS-STARTPTS, {','.join(chain)}, volume={10**(gain/20):.6f} [{lbl}]"
+            f"[{i}:a]"
+            f" atrim={p['start']}:{p['end']}, asetpts=PTS-STARTPTS,"
+            f" asetrate=48000*{r:.8f}, aresample=48000,"
+            f" {atempo_chain(combined_atempo)},"
+            f" volume={10**(p['gain']/20):.6f}"
+            f" [{lbl}]"
         )
         outs.append(f"[{lbl}]")
 
-    # Chain acrossfade between consecutive segments
-    cur = outs[0]
-    acc_filters = []
+    # acrossfades with bar-aware caps
+    acc, cur = [], outs[0] if outs else None
     for i in range(1, len(outs)):
-        nextlbl = outs[i]
-        outlbl  = f"mix{i}"
-        acc_filters.append(f"{cur}{nextlbl} acrossfade=d={xfade_ms/1000.0}:c1=tri:c2=tri [{outlbl}]")
+        prev_len = norm[i-1]["end"] - norm[i-1]["start"]
+        next_len = norm[i]["end"]   - norm[i]["start"]
+        max_allowed = min(
+            bar_seconds if bar_aware else 999,
+            prev_len * 0.5 - 0.05,
+            next_len * 0.5 - 0.05
+        )
+        max_allowed = max(safe_min_piece/4, max_allowed)
+        d_sec = min(xfade_ms_req/1000.0, max_allowed)
+        d_sec = max(0.05, float(d_sec))
+        outlbl = f"mix{i}"
+        acc.append(f"{cur}{outs[i]} acrossfade=d={d_sec}:c1=tri:c2=tri [{outlbl}]")
         cur = f"[{outlbl}]"
 
-    filter_complex = "; ".join(filters + acc_filters)
-    out_id = f"{uuid.uuid4()}.wav"
-    out_path = os.path.join(MIXES, out_id)
-    args = inputs + ["-filter_complex", filter_complex or "", "-map", cur if outs else "0:a", "-ac", "2", out_path]
+    fc = "; ".join(filters + acc)
+    out_id, out_path = f"{uuid.uuid4()}.wav", os.path.join(MIXES, f"{uuid.uuid4()}.wav")
+    args = inputs + ["-filter_complex", fc or "", "-map", cur if outs else "0:a", "-ac", "2", out_path]
     r = ffmpeg(*args)
     if r.returncode != 0:
         return jsonify({"error":"ffmpeg_failed","stderr": r.stderr.decode()}), 500
-
-    return jsonify({ "mix_id": out_id, "url": f"/api/mix/{out_id}" })
+    return jsonify({"mix_id": os.path.basename(out_path), "url": f"/api/mix/file/{os.path.basename(out_path)}"})
 
 # ---- upload
 @app.post("/api/upload")

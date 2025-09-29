@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import io from "socket.io-client";
 import {
-  uploadFile, previewUrl, fetchSections, getProject,
-  fetchSegments, renderArrangement
+  uploadFile, previewUrl, fetchSections, getProject, setProject,
+  fetchSegments, renderArrangement, autoPitch
 } from "./api";
 import { DndContext, closestCenter } from "@dnd-kit/core";
 import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
@@ -29,8 +29,11 @@ function SortablePiece({ piece, index, onRemove }){
     <div ref={setNodeRef} style={style} {...attributes} {...listeners}
          className="p-2 rounded bg-cyan-500/10 flex items-center justify-between">
       <div className="text-sm">
-        {piece.label || "Section"} — {dur}s
-        <span className="opacity-60 ml-2">{piece.name}</span>
+        <div>{piece.label || "Section"} — {dur}s</div>
+        <div className="text-xs opacity-70 mt-1">
+          {(piece.end - piece.start).toFixed(1)}s • speed {(piece.speed ?? 1).toFixed(2)}× • pitch {(piece.pitch ?? 0)} st
+        </div>
+        <span className="opacity-60 text-xs">{piece.name}</span>
       </div>
       <button className="text-xs underline" onClick={()=>onRemove(index)}>remove</button>
     </div>
@@ -39,17 +42,37 @@ function SortablePiece({ piece, index, onRemove }){
 
 function AppInner(){
   const audioRef = useRef(null);
-  const [uploaded, setUploaded] = useState([]); // {file_id,name,duration,segments?}
+  const [uploaded, setUploaded] = useState([]); // {file_id,name,duration,segments?,analysis?}
   const [activeSong, setActiveSong] = useState(null);
   const [timeline, setTimeline] = useState([]); // ordered chosen pieces
   const [xfade, setXfade] = useState(200);
+  const [project, setProjectState] = useState({ bpm: 120, key: "Am" });
+  const [beatsPerBar, setBeatsPerBar] = useState(4);
+  const [barAware, setBarAware] = useState(true);
+  const [snapBars, setSnapBars] = useState(true);
+  const [hqPitch, setHqPitch] = useState(true);
 
-  useEffect(() => { (async () => { await getProject(); await fetchSections(); })(); }, []);
+  // Beat/bar helpers using the Project BPM
+  function secondsPerBeat(projectBpm){
+    return 60 / Math.max(projectBpm || 120, 1e-6);
+  }
+
+  function quantizeLenToBeats(lenSec, projectBpm, beatsPerBar = 4){
+    const spb = secondsPerBeat(projectBpm);
+    const beats = Math.max(1, Math.round(lenSec / spb)); // at least 1 beat
+    return beats * spb;
+  }
+
+  useEffect(() => { (async () => {
+    const { sections } = await fetchSections();
+    const p = await getProject();
+    setProjectState(p);
+  })(); }, []);
 
   async function onUpload(e){
     const file = e.target.files?.[0]; if(!file) return;
     const meta = await uploadFile(file);
-    const item = { ...meta, name: file.name };
+    const item = { ...meta, name: file.name }; // meta.analysis contains bpm/key/first_beat
     // fetch segments for this song
     const { segments } = await fetchSegments(item.file_id);
     item.segments = segments;
@@ -68,8 +91,39 @@ function AppInner(){
       file_id: song.file_id,
       name: song.name,
       start: seg.start, end: seg.end,
-      speed: 1.0, gain: -3.0, label: seg.label
+      speed: 1.0, gain: -3.0, label: seg.label,
+      pitch: 0
     }]);
+  }
+
+  async function lineUpTimeline({ snap = true, beatsPerBar = 4 } = {}){
+    if (!timeline.length) return;
+    setTimeline(items => items.map(p => {
+      const src = uploaded.find(u => u.file_id === p.file_id);
+      const srcBpm = (src?.analysis?.bpm || project.bpm || 120);
+      const speed = project.bpm / Math.max(srcBpm, 1e-6); // time-stretch to Project BPM
+
+      // keep start/end time window but optionally quantize its duration to beat grid
+      let start = p.start;
+      let end = p.end;
+      if (snap){
+        const rawLen = Math.max(0.5, end - start);
+        const snappedLen = quantizeLenToBeats(rawLen, project.bpm, beatsPerBar);
+        end = start + snappedLen;
+      }
+
+      return { ...p, speed, start, end };
+    }));
+  }
+
+  async function onPitchMatch(){
+    if (!timeline.length) return;
+    const ids = Array.from(new Set(timeline.map(t => t.file_id)));
+    const { tracks } = await autoPitch(ids, project.key);
+    setTimeline(items => items.map(p => {
+      const m = tracks.find(t => t.file_id === p.file_id);
+      return m ? { ...p, pitch: m.semitones } : { ...p, pitch: 0 };
+    }));
   }
 
   function onDragEnd(event){
@@ -87,24 +141,109 @@ function AppInner(){
   async function onRenderArrangement(){
     if (!timeline.length) return;
     const pieces = timeline.map(p => ({
-      file_id: p.file_id, start: p.start, end: p.end,
-      speed: p.speed, gain: p.gain
+      file_id: p.file_id,
+      start: p.start,
+      end: p.end,
+      speed: p.speed ?? 1.0,
+      gain: p.gain ?? -3.0,
+      pitch: p.pitch ?? 0
     }));
-    const { url } = await renderArrangement(pieces, xfade);
+
+    const { url } = await renderArrangement(pieces, {
+      xfade_ms: xfade,
+      bar_aware: barAware,
+      project_bpm: project.bpm,
+      beats_per_bar: beatsPerBar,
+      snap_to_bars: snapBars,
+      align_key: true,
+      project_key: project.key,
+      hq_pitch: hqPitch
+    });
     window.open(url, "_blank");
   }
 
-  const active = uploaded.find(u => u.file_id === activeSong);
+  async function updateProjectBPM(e){
+    const bpm = +e.target.value;
+    const p = await setProject(bpm, project.key);
+    setProjectState(p);
+  }
+
+  async function updateProjectKey(e){
+    const key = e.target.value;
+    const p = await setProject(project.bpm, key);
+    setProjectState(p);
+  }
 
   return (
     <div className="min-h-screen bg-[#0b0b11] text-slate-100 p-6">
       <h1 className="text-3xl font-bold">MiniMixLab — Section Builder</h1>
 
-      <div className="mt-4 flex flex-wrap gap-3 items-center">
+      <div className="mt-4 flex flex-wrap gap-3 items-center text-sm">
         <input type="file" accept="audio/*" onChange={onUpload}/>
+
+        <label>Project BPM</label>
+        <input type="number" className="text-black w-20" value={project.bpm} onChange={updateProjectBPM}/>
+
+        <label>Key</label>
+        <select className="text-black" value={project.key} onChange={updateProjectKey}>
+          <option value="C">C</option>
+          <option value="C#">C#</option>
+          <option value="D">D</option>
+          <option value="D#">D#</option>
+          <option value="E">E</option>
+          <option value="F">F</option>
+          <option value="F#">F#</option>
+          <option value="G">G</option>
+          <option value="G#">G#</option>
+          <option value="A">A</option>
+          <option value="A#">A#</option>
+          <option value="B">B</option>
+          <option value="Am">Am</option>
+          <option value="Bm">Bm</option>
+          <option value="Cm">Cm</option>
+          <option value="Dm">Dm</option>
+          <option value="Em">Em</option>
+          <option value="Fm">Fm</option>
+          <option value="Gm">Gm</option>
+        </select>
+
         <label>Crossfade (ms)</label>
-        <input type="number" className="text-black w-24" value={xfade} onChange={e=>setXfade(+e.target.value)}/>
-        <button className="px-3 py-2 rounded bg-cyan-500/20" onClick={onRenderArrangement}>Render Arrangement</button>
+        <input type="number" className="text-black w-20" value={xfade} onChange={e=>setXfade(+e.target.value)}/>
+
+        <label>Beats/Bar</label>
+        <input type="number" className="text-black w-16" value={beatsPerBar} onChange={e=>setBeatsPerBar(+e.target.value || 4)} />
+
+        <label className="flex items-center gap-1">
+          <input type="checkbox" checked={barAware} onChange={e=>setBarAware(e.target.checked)} />
+          Bar-aware
+        </label>
+
+        <label className="flex items-center gap-1">
+          <input type="checkbox" checked={snapBars} onChange={e=>setSnapBars(e.target.checked)} />
+          Snap to bars
+        </label>
+
+        <label className="flex items-center gap-1">
+          <input type="checkbox" checked={hqPitch} onChange={e=>setHqPitch(e.target.checked)} />
+          HQ Pitch
+        </label>
+      </div>
+
+      <div className="mt-4 flex flex-wrap gap-3">
+        <button className="px-3 py-2 rounded bg-cyan-500/20 hover:bg-cyan-500/30"
+                onClick={()=>lineUpTimeline({ snap: true, beatsPerBar })}>
+          Line Up (match BPM + snap)
+        </button>
+
+        <button className="px-3 py-2 rounded bg-cyan-500/20 hover:bg-cyan-500/30"
+                onClick={onPitchMatch}>
+          Pitch-match to {project.key}
+        </button>
+
+        <button className="px-3 py-2 rounded bg-cyan-500/20 hover:bg-cyan-500/30"
+                onClick={onRenderArrangement}>
+          Render Arrangement
+        </button>
       </div>
 
       <div className="grid md:grid-cols-2 gap-6 mt-6">
@@ -115,7 +254,14 @@ function AppInner(){
             {uploaded.map(song => (
               <div key={song.file_id} className="border border-white/10 rounded-lg p-3">
                 <div className="flex items-center justify-between">
-                  <div className="font-mono">{song.name}</div>
+                  <div>
+                    <div className="font-mono">{song.name}</div>
+                    {song.analysis && (
+                      <div className="text-xs opacity-80">
+                        BPM: {song.analysis.bpm.toFixed(1)} • Key: {song.analysis.key}
+                      </div>
+                    )}
+                  </div>
                   <button className="text-xs underline" onClick={()=>setActiveSong(song.file_id)}>
                     {activeSong===song.file_id ? "active" : "set active"}
                   </button>
