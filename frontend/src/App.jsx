@@ -3,6 +3,7 @@ import logoImage from "./assets/MiniMixLabLogo.png";
 
 export default function App() {
   console.log("MiniMixLab: Clean reset App mounted");
+  console.log("Logo image path:", logoImage);
   const [tracks, setTracks] = useState([]);
 
   function injectDemo() {
