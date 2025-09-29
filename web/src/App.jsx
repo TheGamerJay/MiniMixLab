@@ -113,24 +113,16 @@ function AppInner(){
 
   async function onUpload(e){
     const file = e.target.files?.[0]; if(!file) return;
-    console.log("Uploading file:", file.name);
 
     try {
       const meta = await uploadFile(file);
-      console.log("Upload response:", meta);
-
       const item = { ...meta, name: file.name }; // meta.analysis contains bpm/key/first_beat
 
       // fetch segments for this song
-      console.log("Fetching segments for file_id:", item.file_id);
       const { segments } = await fetchSegments(item.file_id);
-      console.log("Segments response:", segments);
-
       item.segments = segments;
       setUploaded(u => [...u, item]);
       setActiveSong(item.file_id);
-
-      console.log("Final item with segments:", item);
     } catch (error) {
       console.error("Upload error:", error);
     }
@@ -422,9 +414,6 @@ function AppInner(){
                           </span>
                         </div>
                       )}
-                      <div className="text-xs text-gray-500 mt-1">
-                        Debug: {song.segments ? `${song.segments.length} segments` : 'No segments'}
-                      </div>
                     </div>
                     <button
                       className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${
@@ -439,20 +428,14 @@ function AppInner(){
                   </div>
 
                   <div className="grid grid-cols-2 gap-3">
-                    {song.segments?.length > 0 ? (
-                      song.segments.map((seg, idx) => (
-                        <div key={idx} onDoubleClick={()=>addSegToTimeline(song, seg)} className="group">
-                          <SegmentCard seg={seg} onPreview={()=>previewSeg(song.file_id, seg)} />
-                          <div className="text-xs text-center text-gray-500 mt-1 group-hover:text-pink-400 transition-colors">
-                            Double-click to add
-                          </div>
+                    {song.segments?.map((seg, idx) => (
+                      <div key={idx} onDoubleClick={()=>addSegToTimeline(song, seg)} className="group">
+                        <SegmentCard seg={seg} onPreview={()=>previewSeg(song.file_id, seg)} />
+                        <div className="text-xs text-center text-gray-500 mt-1 group-hover:text-pink-400 transition-colors">
+                          Double-click to add
                         </div>
-                      ))
-                    ) : (
-                      <div className="col-span-2 text-center text-gray-400 py-4">
-                        {song.segments === undefined ? 'Loading segments...' : 'No segments found'}
                       </div>
-                    )}
+                    ))}
                   </div>
                 </div>
               ))}

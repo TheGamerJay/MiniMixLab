@@ -203,9 +203,15 @@ def auto_pitch():
         "tracks": tracks
     })
 
+@app.route("/healthz")
+def health_check():
+    return jsonify({"status": "healthy", "service": "MiniMixLab"})
+
 if __name__ == "__main__":
     print("Starting MiniMixLab server...")
     print(f"Storage: {STORE}")
     print(f"Mixes: {MIXES}")
     print(f"Rubber Band available: {has_rubberband()}")
-    app.run(host="0.0.0.0", port=5000, debug=False)
+
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=False)

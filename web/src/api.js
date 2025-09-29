@@ -1,4 +1,4 @@
-const API = import.meta.env.VITE_API || "";
+const API = import.meta.env.VITE_API || "https://minimixlab-production.up.railway.app";
 
 export async function uploadFile(file){
   const fd = new FormData();
