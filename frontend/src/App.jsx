@@ -5,30 +5,6 @@ import SectionEditor from "./SectionEditor.jsx";
 import "./SectionEditor.css";
 
 
-class ErrorBoundary extends React.Component {
-  constructor(props){ super(props); this.state = { error: null, info: null }; }
-  static getDerivedStateFromError(error){ return { error }; }
-  componentDidCatch(error, info){ console.error("Render error:", error, info); this.setState({ info }); }
-  render(){
-    if(this.state.error){
-      return (<ErrorBoundary>
-        <div style={{background:"#3b0f0f",color:"#fff",padding:"12px",borderRadius:8,margin:"12px 0",fontFamily:"system-ui"}}>
-          <div style={{fontWeight:700,marginBottom:6}}>UI Render Error</div>
-          <div style={{whiteSpace:"pre-wrap",fontFamily:"ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"}}>
-            {String(this.state.error?.message || this.state.error)}
-          </div>
-          {this.state.info?.componentStack && (
-            <details style={{marginTop:8}} open>
-              <summary>Component stack</summary>
-              <pre style={{margin:0}}>{this.state.info.componentStack}</pre>
-            </details>
-          )}
-        </div>
-      );
-    }
-    return this.props.children;
-  }
-}
 function TrackCard({ track, idx, onMute, onSolo, onPlay, audioRef }) {
   function injectDemo(){
   const mkSecs = (len)=>[
@@ -51,7 +27,7 @@ function TrackCard({ track, idx, onMute, onSolo, onPlay, audioRef }) {
   setProjectBpm(120);
 }
 
-return (<ErrorBoundary>
+return (
     <div className="card">
       <audio ref={audioRef} preload="metadata" />
       <div className="row">
@@ -250,7 +226,7 @@ function injectDemo(){
   setProjectBpm(120);
 }
 
-return (<ErrorBoundary>
+return (
     <div className="wrap" style={{position:"relative"}}><div style={{position:"fixed",left:12,bottom:12,background:"#223",color:"#fff",padding:"6px 10px",borderRadius:8,zIndex:99998,fontFamily:"system-ui"}}>React content rendered</div>
       {/* Debug banner INSIDE the root (keeps one JSX parent) */}
       <div style={{background:"#0b0f1a",color:"#fff",padding:"8px 12px",fontFamily:"system-ui",position:"sticky",top:0,zIndex:9999}}>
@@ -357,6 +333,7 @@ return (<ErrorBoundary>
     </div>
   );
 }
+
 
 
 
