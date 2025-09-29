@@ -1,47 +1,45 @@
-﻿# ---------- Frontend build ----------
+# ---------- Frontend build ----------
 FROM node:20-slim AS web
-WORKDIR /app/frontend
+WORKDIR /app/web
 
 # Install deps
-COPY frontend/package*.json ./
-# If you have package-lock.json, prefer ci; otherwise fallback to install
-RUN if [ -f package-lock.json ]; then npm ci --no-audit --no-fund; else npm install --no-audit --no-fund; fi
+COPY web/package*.json ./
+RUN npm install --no-audit --no-fund
 
 # Build
-COPY frontend/ ./
-# Vite outDir is ../frontend_dist per our config; this will create /app/frontend_dist
+COPY web/ ./
 RUN npm run build
 
 # ---------- Backend runtime ----------
 FROM python:3.11-slim
 
-# System libs for librosa/soundfile + ffmpeg + rubberband (CPU)
+# System libs for FFmpeg and audio processing
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    libsndfile1 ffmpeg rubberband-cli \
+    ffmpeg \
+    wget \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 # Copy backend and built frontend
-COPY backend/ /app/backend/
-COPY --from=web /app/frontend_dist /app/frontend_dist
+COPY server/ /app/server/
+COPY --from=web /app/web/dist /app/server/static
 
 # Python deps
-RUN set -eux; for i in 1 2 3 4 5; do \
-pip install --no-cache-dir --default-timeout=120 -r /app/backend/requirements.txt && break || (echo "pip attempt $i failed"; sleep 5); done
+RUN pip install --no-cache-dir -r /app/server/requirements.txt
+
+# Create storage directories
+RUN mkdir -p /app/server/storage /app/server/mixes
 
 # Env
-ENV HOST=0.0.0.0 \
-    PORT=8080 \
-    PYTHONUNBUFFERED=1 \
-    ENABLE_SEPARATION=false
+ENV PORT=8080 \
+    PYTHONUNBUFFERED=1
 
 EXPOSE 8080
 
-# Optional healthcheck (FastAPI root serves index.html if present)
+# Health check
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-  CMD wget -qO- http://127.0.0.1:${PORT}/ || exit 1
+  CMD wget -qO- http://127.0.0.1:${PORT}/healthz || exit 1
 
-# Run API (serves UI too)
-CMD ["bash","-lc","cd /app/backend && uvicorn main:app --host ${HOST} --port ${PORT}"]
-
+# Run Flask server
+CMD ["python", "/app/server/app.py"]

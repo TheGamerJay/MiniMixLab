@@ -146,6 +146,20 @@ def _mix_progress(msg):
 @app.get("/healthz")
 def health(): return "ok", 200
 
+# --- serve frontend static files ---
+@app.route("/")
+def serve_frontend():
+    static_dir = os.path.join(BASE, "static")
+    index_file = os.path.join(static_dir, "index.html")
+    if os.path.exists(index_file):
+        return send_file(index_file)
+    return jsonify({"message": "MiniMixLab Flask Backend", "status": "running"})
+
+@app.route("/<path:filename>")
+def serve_static(filename):
+    static_dir = os.path.join(BASE, "static")
+    return send_file(os.path.join(static_dir, filename))
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     socketio.run(app, host="0.0.0.0", port=port)
