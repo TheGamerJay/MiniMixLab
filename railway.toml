@@ -4,5 +4,3 @@ builder = "dockerfile"
 [deploy]
 healthcheckPath = "/healthz"
 healthcheckTimeout = 30
-restartPolicyType = "on-failure"
-restartPolicyMaxRetries = 3
