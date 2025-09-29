@@ -8,6 +8,7 @@ import { DndContext, closestCenter } from "@dnd-kit/core";
 import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import ErrorBoundary from "./ErrorBoundary";
+import logoImage from "./assets/MiniMixLabLogo.png";
 
 function SegmentCard({ seg, onPreview }) {
   const dur = (seg.end - seg.start).toFixed(1);
@@ -202,7 +203,10 @@ function AppInner(){
 
   return (
     <div className="min-h-screen bg-[#0b0b11] text-slate-100 p-6">
-      <h1 className="text-3xl font-bold">MiniMixLab — Section Builder</h1>
+      <div className="flex items-center gap-4 mb-6">
+        <img src={logoImage} alt="MiniMixLab Logo" className="h-12 w-auto" />
+        <h1 className="text-3xl font-bold">MiniMixLab</h1>
+      </div>
 
       <div className="mt-4 flex flex-wrap gap-3 items-center text-sm">
         <input type="file" accept="audio/*" onChange={onUpload}/>
