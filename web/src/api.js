@@ -1,24 +1,47 @@
-const API = import.meta.env.VITE_API || ""; // same origin if proxied
+const API = import.meta.env.VITE_API || "";
 
-export async function uploadFile(file) {
+export async function uploadFile(file){
   const fd = new FormData();
   fd.append("file", file);
-  const r = await fetch(`${API}/api/upload`, { method: "POST", body: fd });
-  if (!r.ok) throw new Error("upload failed");
+  const r = await fetch(`${API}/api/upload`, { method:"POST", body: fd });
+  if (!r.ok) throw new Error(await r.text());
   return r.json();
 }
 
-export function previewUrl(file_id, start, end, speed = 1.0) {
+export function previewUrl(file_id, start, end, speed=1.0){
   const q = new URLSearchParams({ file_id, start, end, speed });
   return `${API}/api/preview?${q}`;
 }
 
-export async function renderMix(tracks) {
+export async function fetchSections(){
+  const r = await fetch(`${API}/api/sections`);
+  return r.json();
+}
+
+export async function saveSections(sections){
+  const r = await fetch(`${API}/api/sections`, {
+    method:"POST",
+    headers: {"Content-Type":"application/json"},
+    body: JSON.stringify({ sections })
+  });
+  return r.json();
+}
+
+export async function startMix(tracks, socket_room){
   const r = await fetch(`${API}/api/mix`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ tracks }),
+    method:"POST",
+    headers: {"Content-Type":"application/json"},
+    body: JSON.stringify({ tracks, socket_room })
   });
   if (!r.ok) throw new Error(await r.text());
+  return r.json(); // {job_id}
+}
+
+export async function getJob(job_id){
+  const r = await fetch(`${API}/api/jobs/${job_id}`);
   return r.json();
+}
+
+export function mixUrl(mix_id){
+  return `${API}/api/mix/file/${mix_id}`;
 }

@@ -1,11 +1,8 @@
-import os, uuid, time, tempfile, subprocess, json
+import os, uuid, time, tempfile, subprocess, json, threading, queue
 from flask import Flask, request, send_file, jsonify, Response
 from flask_cors import CORS
-from flask_socketio import SocketIO, emit
-import psycopg2
-from datetime import datetime
+from flask_socketio import SocketIO, emit, join_room, leave_room
 
-# --- config
 BASE = os.path.dirname(__file__)
 STORE = os.path.join(BASE, "storage")
 MIXES = os.path.join(BASE, "mixes")
@@ -14,97 +11,41 @@ os.makedirs(MIXES, exist_ok=True)
 
 app = Flask(__name__)
 CORS(app, supports_credentials=True)
-
-# Use Railway environment variables
 app.config["SECRET_KEY"] = os.environ.get("LOCAL_SECRET_KEY") or os.environ.get("SECRET_KEY", "dev_key")
-app.config["DATABASE_URL"] = os.environ.get("DATABASE_URL")
-app.config["DATABASE_PUBLIC_URL"] = os.environ.get("DATABASE_PUBLIC_URL")
-
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="eventlet")
 
 def ffmpeg(*args):
     cmd = ["ffmpeg","-hide_banner","-loglevel","error"] + list(args)
     return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-# --- database helpers ---
-def get_db_connection():
-    """Get database connection if available"""
-    try:
-        if app.config.get("DATABASE_URL"):
-            return psycopg2.connect(app.config["DATABASE_URL"])
-    except Exception as e:
-        print(f"Database connection failed: {e}")
-    return None
+# ---- SECTIONS (global defaults; you can persist per-project if you want)
+SECTIONS = [
+    {"label": "Intro",   "start": 0,   "end": 30},
+    {"label": "Verse 1", "start": 30,  "end": 70},
+    {"label": "Chorus",  "start": 70,  "end": 100},
+    {"label": "Bridge",  "start": 100, "end": 135},
+    {"label": "Chorus 2","start": 135, "end": 165},
+]
 
-def init_db():
-    """Initialize database tables if connection available"""
-    conn = get_db_connection()
-    if not conn:
-        return False
-    try:
-        with conn.cursor() as cur:
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS uploads (
-                    id SERIAL PRIMARY KEY,
-                    file_id VARCHAR(255) UNIQUE NOT NULL,
-                    filename VARCHAR(255) NOT NULL,
-                    duration FLOAT,
-                    uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS mixes (
-                    id SERIAL PRIMARY KEY,
-                    mix_id VARCHAR(255) UNIQUE NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-        conn.commit()
-        return True
-    except Exception as e:
-        print(f"Database init failed: {e}")
-        return False
-    finally:
-        conn.close()
+@app.get("/api/sections")
+def get_sections():
+    return jsonify({"sections": SECTIONS})
 
-def log_upload(file_id, filename, duration):
-    """Log file upload to database if available"""
-    conn = get_db_connection()
-    if not conn:
-        return
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO uploads (file_id, filename, duration) VALUES (%s, %s, %s) ON CONFLICT (file_id) DO NOTHING",
-                (file_id, filename, duration)
-            )
-        conn.commit()
-    except Exception as e:
-        print(f"Failed to log upload: {e}")
-    finally:
-        conn.close()
+@app.post("/api/sections")
+def set_sections():
+    # Accepts: { sections: [ {label, start, end}, ... ] }
+    data = request.get_json(force=True)
+    secs = data.get("sections", [])
+    if not isinstance(secs, list) or not secs:
+        return jsonify({"error": "invalid sections"}), 400
+    global SECTIONS
+    SECTIONS = [
+        {"label": s["label"], "start": float(s["start"]), "end": float(s["end"])}
+        for s in secs
+    ]
+    return jsonify({"ok": True, "sections": SECTIONS})
 
-def log_mix(mix_id):
-    """Log mix creation to database if available"""
-    conn = get_db_connection()
-    if not conn:
-        return
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO mixes (mix_id) VALUES (%s) ON CONFLICT (mix_id) DO NOTHING",
-                (mix_id,)
-            )
-        conn.commit()
-    except Exception as e:
-        print(f"Failed to log mix: {e}")
-    finally:
-        conn.close()
-
-# Initialize database on startup
-init_db()
-
-# --- upload stem
+# ---- upload
 @app.post("/api/upload")
 def upload():
     f = request.files.get("file")
@@ -113,131 +54,133 @@ def upload():
     fid = str(uuid.uuid4()) + ext
     path = os.path.join(STORE, fid)
     f.save(path)
-    # simple probe
-    pr = subprocess.run(["ffprobe","-v","error","-show_entries","format=duration","-of","json",path],
-                        stdout=subprocess.PIPE)
+    pr = subprocess.run(
+        ["ffprobe","-v","error","-show_entries","format=duration","-of","json",path],
+        stdout=subprocess.PIPE
+    )
     meta = json.loads(pr.stdout or b"{}")
-    duration = float(meta.get("format",{}).get("duration",0))
+    return jsonify({"file_id": fid, "duration": float(meta.get("format",{}).get("duration",0))})
 
-    # Log to database if available
-    log_upload(fid, f.filename, duration)
-
-    return jsonify({"file_id": fid, "duration": duration})
-
-# --- stream preview slice (memory-safe)
-# GET /api/preview?file_id=..&start=..&end=..&speed=1.0
+# ---- memory-safe preview slice
 @app.get("/api/preview")
 def preview():
     fid = request.args.get("file_id")
     start = float(request.args.get("start", 0))
     end = float(request.args.get("end", start+15))
-    speed = float(request.args.get("speed", 1.0)) # can be used for BPM adjust
+    speed = float(request.args.get("speed", 1.0))
     src = os.path.join(STORE, fid)
     if not os.path.exists(src): return jsonify({"error":"not found"}), 404
 
-    # Using a temp FIFO stream to avoid loading into RAM
     def generate():
-        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=True) as tmp:
-            # atempo supports 0.5..2.0; chain if needed
-            atempo = []
+        # Chain atempo into 0.5..2.0 safe steps
+        sp = speed
+        atempo_chain = []
+        while sp < 0.5 or sp > 2.0:
+            step = 2.0 if sp > 2.0 else 0.5
+            atempo_chain.append(f"atempo={step}")
+            sp = sp/step if sp > 2.0 else sp/0.5
+        atempo_chain.append(f"atempo={sp}")
+        args = [
+            "-ss", str(start), "-to", str(end),
+            "-i", src,
+            "-filter:a", ",".join(atempo_chain),
+            "-map", "a:0", "-b:a", "128k", "-f", "mp3", "pipe:1"
+        ]
+        proc = subprocess.Popen(["ffmpeg","-hide_banner","-loglevel","error"]+args,
+                                stdout=subprocess.PIPE)
+        try:
+            while True:
+                chunk = proc.stdout.read(64*1024)
+                if not chunk: break
+                yield chunk
+        finally:
+            proc.kill()
+
+    return Response(generate(), mimetype="audio/mpeg")
+
+# ---- mixing with progress (Socket.IO)
+JOBS = {}  # job_id -> {"status": "queued|running|done|error|cancelled", "result": mix_id or None}
+
+def progress_emit(room, pct, msg=""):
+    socketio.emit("mix_progress", {"percent": pct, "message": msg}, to=room)
+
+def build_mix(job_id, room, tracks):
+    try:
+        JOBS[job_id]["status"] = "running"
+        progress_emit(room, 5, "Preparing")
+
+        inputs = []
+        filters = []
+        amix_inputs = []
+
+        for i, t in enumerate(tracks):
+            src = os.path.join(STORE, t["file_id"])
+            if not os.path.exists(src):
+                raise RuntimeError(f"missing {t['file_id']}")
+            inputs += ["-i", src]
+            speed = float(t.get("speed",1.0))
+            gain  = float(t.get("gain",0.0))
+            start = float(t.get("offset",0.0))
+
+            # chain safe atempo
             sp = speed
-            # chain atempo in steps between 0.5..2.0 for stability
+            atempo = []
             while sp < 0.5 or sp > 2.0:
                 step = 2.0 if sp > 2.0 else 0.5
                 atempo.append(f"atempo={step}")
                 sp = sp/step if sp > 2.0 else sp/0.5
             atempo.append(f"atempo={sp}")
-            af = ",".join(atempo)
+            lbl = f"a{i}"
+            ms = int(start*1000)
+            filters.append(f"[{i}:a] adelay={ms}|{ms}, {','.join(atempo)}, volume={10**(gain/20):.6f} [{lbl}]")
+            amix_inputs.append(f"[{lbl}]")
 
-            # slice & speed adjust, encode mp3 @128k
-            args = [
-                "-ss", str(start),
-                "-to", str(end),
-                "-i", src,
-                "-filter:a", af,
-                "-map", "a:0",
-                "-b:a", "128k",
-                "-f", "mp3",
-                "pipe:1"
-            ]
-            proc = subprocess.Popen(["ffmpeg","-hide_banner","-loglevel","error"]+args,
-                                    stdout=subprocess.PIPE)
-            try:
-                while True:
-                    chunk = proc.stdout.read(64*1024)
-                    if not chunk: break
-                    yield chunk
-            finally:
-                proc.kill()
+        progress_emit(room, 40, "Mixing")
+        filter_complex = "; ".join(filters) + f"; {''.join(amix_inputs)} amix=inputs={len(tracks)}:normalize=0 [mix]"
 
-    return Response(generate(), mimetype="audio/mpeg")
+        out_id = f"{uuid.uuid4()}.wav"
+        out_path = os.path.join(MIXES, out_id)
+        args = inputs + ["-filter_complex", filter_complex, "-map", "[mix]", "-ac", "2", out_path]
+        r = ffmpeg(*args)
+        if r.returncode != 0:
+            raise RuntimeError(r.stderr.decode())
 
-# --- render full mix (server-side)
-# body: { "tracks": [ { "file_id": "...", "offset": 0.0, "gain": -3.0, "speed": 1.0 } ] }
+        JOBS[job_id]["status"] = "done"
+        JOBS[job_id]["result"] = out_id
+        progress_emit(room, 100, "Done")
+    except Exception as e:
+        JOBS[job_id]["status"] = "error"
+        JOBS[job_id]["result"] = str(e)
+        progress_emit(room, 100, f"Error: {e}")
+
 @app.post("/api/mix")
 def mix():
     payload = request.get_json(force=True)
     tracks = payload.get("tracks", [])
+    socket_room = payload.get("socket_room")  # client-provided UUID to receive progress
     if not tracks: return jsonify({"error":"no tracks"}), 400
+    job_id = str(uuid.uuid4())
+    JOBS[job_id] = {"status":"queued", "result":None}
+    threading.Thread(target=build_mix, args=(job_id, socket_room or job_id, tracks), daemon=True).start()
+    return jsonify({"job_id": job_id})
 
-    out_id = f"{uuid.uuid4()}.wav"
-    out_path = os.path.join(MIXES, out_id)
+@app.get("/api/jobs/<job_id>")
+def job_status(job_id):
+    j = JOBS.get(job_id)
+    if not j: return jsonify({"error":"not found"}), 404
+    return jsonify(j)
 
-    # build ffmpeg inputs/filters
-    inputs = []
-    filters = []
-    amix_inputs = []
-    for i, t in enumerate(tracks):
-        src = os.path.join(STORE, t["file_id"])
-        if not os.path.exists(src): return jsonify({"error": f'missing {t["file_id"]}'}), 400
-        # each as input
-        inputs += ["-i", src]
-        speed = float(t.get("speed",1.0))
-        gain = float(t.get("gain",0.0))
-        start = float(t.get("offset",0.0))
-        # filtergraph label
-        lbl_in = f"[{i}:a]"
-        lbl = f"a{i}"
-        atempo = []
-        sp = speed
-        while sp < 0.5 or sp > 2.0:
-            step = 2.0 if sp > 2.0 else 0.5
-            atempo.append(f"atempo={step}")
-            sp = sp/step if sp > 2.0 else sp/0.5
-        atempo.append(f"atempo={sp}")
-        # apply offset by adding silent pad at start
-        filters.append(f"{lbl_in} adelay={int(start*1000)}|{int(start*1000)}, " +
-                       f"{','.join(atempo)}, volume={10**(gain/20):.6f} [{lbl}]")
-        amix_inputs.append(f"[{lbl}]")
-
-    # mixdown
-    filter_complex = "; ".join(filters) + f"; {''.join(amix_inputs)} amix=inputs={len(tracks)}:normalize=0 [mix]"
-    args = inputs + ["-filter_complex", filter_complex, "-map", "[mix]", "-ac", "2", out_path]
-    r = ffmpeg(*args)
-    if r.returncode != 0:
-        return jsonify({"error":"ffmpeg_failed", "stderr": r.stderr.decode()}), 500
-
-    # Log to database if available
-    log_mix(out_id)
-
-    return jsonify({"mix_id": out_id, "url": f"/api/mix/{out_id}"})
-
-@app.get("/api/mix/<mix_id>")
+@app.get("/api/mix/file/<mix_id>")
 def get_mix(mix_id):
     path = os.path.join(MIXES, mix_id)
     if not os.path.exists(path): return jsonify({"error":"not found"}), 404
     return send_file(path, mimetype="audio/wav", as_attachment=True, download_name="mix.wav")
 
-# --- simple progress example via socket
-@socketio.on("mix_progress")
-def _mix_progress(msg):
-    # you'd emit real progress from long running tasks
-    for i in range(0,101,10):
-        emit("mix_progress", {"percent": i})
-        socketio.sleep(0.1)
-
-@app.get("/healthz")
-def health(): return "ok", 200
+# socket join helper
+@socketio.on("join")
+def on_join(room):
+    join_room(room)
+    emit("mix_progress", {"percent": 0, "message": "Joined room"}, to=room)
 
 # --- serve frontend static files ---
 @app.route("/")
@@ -256,6 +199,9 @@ def serve_static(filename):
         return send_file(file_path)
     # If file not found in static, return 404
     return jsonify({"error": "File not found"}), 404
+
+@app.get("/healthz")
+def health(): return "ok", 200
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
