@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { uploadFile, previewUrl, renderMix } from "./api";
 import useAudioSlice from "./useAudioSlice";
+import logoImage from "./assets/MiniMixLabLogo.png";
 
 export default function App() {
   const [uploaded, setUploaded] = useState([]);
@@ -38,7 +39,7 @@ export default function App() {
     <div className="min-h-screen bg-[#0b0b11] text-slate-100 p-6">
       <div className="flex items-center gap-4 mb-6">
         <img
-          src="/logo-placeholder.svg"
+          src={logoImage}
           alt="MiniMixLab Logo"
           className="h-10 w-auto"
           onError={(e) => {
