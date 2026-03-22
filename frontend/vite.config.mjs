@@ -7,6 +7,14 @@ export default defineConfig({
   build: {
     outDir: "../frontend_dist",
     emptyOutDir: true,
-    copyPublicDir: true
-  }
+    copyPublicDir: true,
+  },
+  server: {
+    proxy: {
+      "/api": {
+        target: "http://localhost:5000",
+        changeOrigin: true,
+      },
+    },
+  },
 });
