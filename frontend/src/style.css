@@ -35,11 +35,12 @@
   --green:   #22c55e;
   --red:     #ef4444;
 
-  /* Gradients — MixLab indigo→pink */
-  --grad-primary:  linear-gradient(to right, #4f46e5, #ec4899);
-  --grad-accent:   linear-gradient(135deg, #ec4899, #f43f5e);
-  --grad-neon:     linear-gradient(135deg, #22d3ee, #4f46e5);
+  /* Gradients — MixLab cyan→pink brand theme */
+  --grad-primary:  linear-gradient(to right, #22d3ee, #ec4899);
+  --grad-accent:   linear-gradient(135deg, #ec4899, #22d3ee);
+  --grad-neon:     linear-gradient(135deg, #22d3ee, #ec4899);
   --grad-warm:     linear-gradient(135deg, #f59e0b, #ec4899);
+  --grad-indigo:   linear-gradient(to right, #4f46e5, #7c3aed);
 
   /* Glow effects */
   --glow-indigo: 0 0 20px rgba(79,70,229,0.4);
@@ -251,7 +252,7 @@ p { color: var(--text-2); }
 }
 .btn-primary:hover:not(:disabled) {
   filter: brightness(1.12);
-  box-shadow: var(--glow-indigo);
+  box-shadow: var(--glow-cyan);
 }
 
 .btn-accent {
