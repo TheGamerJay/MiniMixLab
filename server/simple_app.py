@@ -19,7 +19,7 @@ except ImportError:
 
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
 
-# ── Genre knowledge (extracted from Mini AI Studios pipeline) ─────────────────
+# ── Genre knowledge (extracted from Mini Mix Labs pipeline) ─────────────────
 
 GENRE_STRUCTURES = {
     "hip-hop":     ["[Intro]","[Verse 1]","[Hook]","[Verse 2]","[Hook]","[Outro]"],
@@ -306,7 +306,7 @@ def get_genres():
 def health_check():
     return jsonify({
         "status":  "healthy",
-        "service": "Mini AI Studio",
+        "service": "Mini Mix Lab",
         "openai":  _openai_ok,
         "model":   OPENAI_MODEL,
     })
@@ -331,7 +331,7 @@ NOTATION_RULES = """NOTATION RULES (MANDATORY):
 
 # ── Secret Writer (OpenAI) ────────────────────────────────────────────────────
 
-SECRET_WRITER_SYSTEM = """You are "Secret Writer" — a professional songwriter, composer, producer, and vocal director inside Mini AI Studio.
+SECRET_WRITER_SYSTEM = """You are "Secret Writer" — a professional songwriter, composer, producer, and vocal director inside Mini Mix Lab.
 
 MISSION: Deliver complete, release-ready songs in any genre.
 
@@ -431,7 +431,7 @@ def secret_writer():
 
 # ── Lyrics generation (OpenAI) ────────────────────────────────────────────────
 
-LYRICS_SYSTEM = """You are a professional songwriter inside Mini AI Studio.
+LYRICS_SYSTEM = """You are a professional songwriter inside Mini Mix Lab.
 
 SINGABILITY RULE: Lyrics must be written to be SUNG, not read. Short punchy lines, consistent syllable counts per section, simple emotional choruses — if a chorus sounds like a poem, simplify it.
 
@@ -789,7 +789,7 @@ def section_writer():
 def serve_frontend():
     if os.path.exists(DIST):
         return send_from_directory(DIST, "index.html")
-    return jsonify({"message": "Mini AI Studio API", "status": "running"})
+    return jsonify({"message": "Mini Mix Lab API", "status": "running"})
 
 
 @app.route("/<path:path>")
@@ -804,7 +804,7 @@ def serve_static(path):
 
 
 if __name__ == "__main__":
-    print(f"Mini AI Studio — backend starting")
+    print(f"Mini Mix Lab — backend starting")
     print(f"OpenAI: {'✓ ready' if _openai_ok else '✗ OPENAI_API_KEY not set'}")
     print(f"Model:  {OPENAI_MODEL}")
     port = int(os.environ.get("PORT", 5000))

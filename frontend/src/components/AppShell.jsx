@@ -39,10 +39,10 @@ export default function AppShell() {
       {/* ── Top nav ─────────────────────────────────────────── */}
       <nav className="nav">
         {/* Logo */}
-        <NavLink to="/studio/create" className="nav-logo" style={{ textDecoration: "none" }}>
-          <img src={logoImage} alt="Mini AI Studio"
+        <NavLink to="/create" className="nav-logo" style={{ textDecoration: "none" }}>
+          <img src={logoImage} alt="Mini Mix Lab"
                onError={e => { e.target.style.display = "none"; }} />
-          <span className="nav-logo-text">Mini AI Studio</span>
+          <span className="nav-logo-text">Mini Mix Lab</span>
         </NavLink>
 
         {/* Workspace tabs */}
