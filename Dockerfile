@@ -1,13 +1,13 @@
 # ---------- Frontend build ----------
 FROM node:20-slim AS web
-WORKDIR /app/web
+WORKDIR /app/frontend
 
 # Install deps
-COPY web/package*.json ./
+COPY frontend/package*.json ./
 RUN npm install --no-audit --no-fund
 
 # Build
-COPY web/ ./
+COPY frontend/ ./
 RUN npm run build
 
 # ---------- Backend runtime ----------
@@ -23,7 +23,7 @@ WORKDIR /app
 
 # Copy backend and built frontend
 COPY server/ /app/server/
-COPY --from=web /app/web/dist /app/server/static
+COPY --from=web /app/frontend_dist /app/server/static
 
 # Python deps
 RUN pip install --no-cache-dir -r /app/server/requirements.txt

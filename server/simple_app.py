@@ -128,9 +128,13 @@ GENRE_OPTIONS = [
 NODE_ENV    = os.environ.get("NODE_ENV", "development")
 CORS_ORIGIN = os.environ.get("CORS_ORIGIN", "*")
 
-BASE  = os.path.dirname(__file__)
+BASE  = os.path.dirname(os.path.abspath(__file__))
 STORE = os.path.join(BASE, "storage")
-DIST  = os.path.join(BASE, "..", "frontend_dist")
+# Production (Docker): static/ is populated by the build stage
+# Development: fall back to ../frontend_dist built by Vite
+_static = os.path.join(BASE, "static")
+_dist   = os.path.join(BASE, "..", "frontend_dist")
+DIST    = _static if os.path.isdir(_static) else _dist
 MIXES = os.path.join(BASE, "mixes")
 os.makedirs(STORE, exist_ok=True)
 os.makedirs(MIXES, exist_ok=True)
