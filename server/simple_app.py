@@ -130,6 +130,7 @@ CORS_ORIGIN = os.environ.get("CORS_ORIGIN", "*")
 
 BASE  = os.path.dirname(__file__)
 STORE = os.path.join(BASE, "storage")
+DIST  = os.path.join(BASE, "..", "frontend_dist")
 MIXES = os.path.join(BASE, "mixes")
 os.makedirs(STORE, exist_ok=True)
 os.makedirs(MIXES, exist_ok=True)
@@ -782,17 +783,20 @@ def section_writer():
 
 @app.route("/")
 def serve_frontend():
-    static_dir = os.path.join(BASE, "static")
-    return send_from_directory(static_dir, "index.html") \
-        if os.path.exists(static_dir) \
-        else jsonify({"message": "Mini AI Studio API", "status": "running"})
+    if os.path.exists(DIST):
+        return send_from_directory(DIST, "index.html")
+    return jsonify({"message": "Mini AI Studio API", "status": "running"})
 
 
 @app.route("/<path:path>")
 def serve_static(path):
-    static_dir = os.path.join(BASE, "static")
-    return send_from_directory(static_dir, path) if os.path.exists(static_dir) \
-        else jsonify({"error": "Not found"}), 404
+    if os.path.exists(DIST):
+        file_path = os.path.join(DIST, path)
+        if os.path.exists(file_path):
+            return send_from_directory(DIST, path)
+        # SPA fallback — all unmatched routes serve index.html for React Router
+        return send_from_directory(DIST, "index.html")
+    return jsonify({"error": "Not found"}), 404
 
 
 if __name__ == "__main__":
